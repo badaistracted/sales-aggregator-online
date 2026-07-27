@@ -1,4 +1,7 @@
-Flask>=3.0
-pandas>=2.0
-openpyxl>=3.1
-holidays>=0.50
+flask>=3.0.0
+openpyxl>=3.1.2
+pandas>=2.2.0
+numpy>=1.26.0
+holidays>=0.46
+werkzeug>=3.0.0
+xlrd>=2.0.1
