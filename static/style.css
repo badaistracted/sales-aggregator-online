@@ -1,0 +1,404 @@
+:root {
+  --navy-950: #0f1f38;
+  --navy-800: #16294a;
+  --navy-700: #1f3864;
+  --paper: #f6f4ef;
+  --paper-raised: #ffffff;
+  --hairline: #dcd6c9;
+  --ink: #21242b;
+  --ink-soft: #5b606c;
+  --red: #b8362f;
+  --red-dark: #942a24;
+  --weekday: #1f3864;
+  --weekend: #4c7a5d;
+  --weekend-tint: #e2efda;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(15, 31, 56, 0.06), 0 6px 20px rgba(15, 31, 56, 0.05);
+
+  /* No CDN font dependency, this app should render identically offline.
+     Stacks lean on whichever geometric/humanist sans and mono faces the
+     OS already ships, so the type character survives without a font file. */
+  --font-display: "Century Gothic", "Segoe UI Semibold", "Avenir Next", "Avenir", ui-sans-serif, sans-serif;
+  --font-body: "Segoe UI", ui-sans-serif, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "SF Mono", "Consolas", "Menlo", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px 24px 80px;
+}
+
+/* ---------- Top bar ---------- */
+
+.topbar {
+  background: var(--navy-950);
+  color: #fff;
+  padding: 18px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.topbar__brand { display: flex; align-items: center; gap: 14px; }
+
+.topbar__mark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  background: var(--red);
+  color: #fff;
+  border-radius: 6px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.topbar__titles h1 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.topbar__titles p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: #a9b4c9;
+}
+
+.topbar__legend { display: flex; gap: 18px; }
+
+.legend-item {
+  font-size: 12.5px;
+  color: #cdd5e3;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot--weekday { background: #7e93bd; }
+.dot--weekend { background: #8fc79f; }
+
+/* ---------- Panels ---------- */
+
+.panel {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  margin-top: 20px;
+}
+
+.panel__heading {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  margin: 0 0 16px;
+}
+
+/* ---------- Upload ---------- */
+
+.upload-panel { margin-top: 28px; }
+
+.dropzone {
+  border: 1.5px dashed #b7ae99;
+  border-radius: var(--radius);
+  padding: 40px 24px;
+  text-align: center;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropzone.is-dragover {
+  border-color: var(--red);
+  background: #fbf1ee;
+}
+
+.dropzone__icon {
+  color: var(--navy-700);
+  margin-bottom: 6px;
+}
+
+.dropzone__title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 4px 0 4px;
+}
+
+.dropzone__hint {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--red);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.file-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-list li {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 5px 12px;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-list .remove-file {
+  cursor: pointer;
+  color: var(--red);
+  font-weight: 700;
+  background: none;
+  border: none;
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+}
+
+.upload-panel__actions {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.status-text {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.status-text.is-error { color: var(--red-dark); }
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 8px;
+  padding: 11px 20px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  transition: transform 0.08s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.btn--primary {
+  background: var(--navy-950);
+  color: #fff;
+}
+
+.btn--primary:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn--primary:not(:disabled):hover { box-shadow: 0 4px 14px rgba(15, 31, 56, 0.25); }
+
+.btn--accent {
+  background: var(--red);
+  color: #fff;
+}
+
+.btn--accent:hover { background: var(--red-dark); }
+
+/* ---------- Errors ---------- */
+
+.error-panel {
+  border-color: #e3b7ac;
+  background: #fbf1ee;
+}
+
+.error-panel h2 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--red-dark);
+  margin: 0 0 10px;
+}
+
+.error-panel ul { margin: 0; padding-left: 18px; }
+.error-panel li { font-size: 13.5px; color: var(--ink); margin-bottom: 4px; }
+.error-panel code { font-family: var(--font-mono); font-size: 12.5px; }
+
+/* ---------- Results header ---------- */
+
+.results__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 36px;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  margin: 0 0 4px;
+}
+
+.results__header h2 {
+  font-family: var(--font-display);
+  font-size: 34px;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.results__subtitle {
+  margin: 4px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+
+/* ---------- Summary table ---------- */
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.summary-table th {
+  text-align: left;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  border-bottom: 1.5px solid var(--hairline);
+  padding: 8px 10px;
+}
+
+.summary-table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+}
+
+.summary-table td:first-child { font-family: var(--font-body); font-weight: 600; }
+
+.summary-table tbody tr:hover { background: var(--paper); }
+
+.uplift-pill {
+  display: inline-block;
+  background: var(--weekend-tint);
+  color: #2f5a3d;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ---------- Tenant cards ---------- */
+
+.tenant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.tenant-card {
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.tenant-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.tenant-card__name {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.tenant-card__total {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* the "month heartbeat" strip: one tick per day, colored by day type */
+.heartbeat {
+  display: flex;
+  gap: 2px;
+  margin: 10px 0 14px;
+}
+
+.heartbeat__tick {
+  flex: 1;
+  height: 6px;
+  border-radius: 2px;
+  background: #cfd8e6;
+}
+
+.heartbeat__tick[data-type="Weekend"] { background: var(--weekend); }
+.heartbeat__tick[data-type="Weekday"] { background: var(--weekday); opacity: 0.55; }
+
+.tenant-card canvas { max-height: 200px; }
+
+@media (max-width: 640px) {
+  .topbar { flex-direction: column; align-items: flex-start; }
+  .results__header h2 { font-size: 26px; }
+  .summary-table { display: block; overflow-x: auto; }
+}
