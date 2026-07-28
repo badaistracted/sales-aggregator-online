@@ -154,6 +154,28 @@ def read_excel(path):
         return {"type": "error", "message": "Excel Error: " + str(e)}
 
 
+def read_pdf_ocr(path):
+    """Fallback: Convert PDF to images and run Tesseract OCR."""
+    try:
+        from pdf2image import convert_from_path
+        import pytesseract
+
+        images = convert_from_path(path, dpi=300)
+        text_lines = []
+
+        for img in images:
+            text = pytesseract.image_to_string(img, lang="eng")
+            if text:
+                text_lines.extend([l.strip() for l in text.split("\n") if l.strip()])
+
+        if text_lines:
+            return {"type": "text", "lines": text_lines}
+
+        return {"type": "error", "message": "PDF OCR: No text detected in scanned images."}
+    except Exception as e:
+        return {"type": "error", "message": "PDF OCR Error: " + str(e)}
+
+
 def read_pdf(path):
     try:
         tables_found = []
@@ -171,6 +193,7 @@ def read_pdf(path):
                 if text:
                     text_lines.extend([l.strip() for l in text.split("\n") if l.strip()])
 
+        # If we found structured data, return it
         if tables_found:
             max_cols = max(len(r) for r in tables_found)
             for r in tables_found:
@@ -181,10 +204,12 @@ def read_pdf(path):
         if text_lines:
             return {"type": "text", "lines": text_lines}
 
-        return {"type": "error", "message": "PDF: No content found."}
-    except Exception as e:
-        return {"type": "error", "message": "PDF Error: " + str(e)}
+        # ── No text found → Try OCR fallback ──────────────────────
+        return read_pdf_ocr(path)
 
+    except Exception as e:
+        # If pdfplumber crashes entirely, try OCR as last resort
+        return read_pdf_ocr(path)
 
 # ─── HTML ────────────────────────────────────────────────────
 
