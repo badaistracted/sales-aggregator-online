@@ -147,10 +147,6 @@ HTML_UI = """
 
 # ─── FLASK ROUTES ───────────────────────────────────────────
 
-@app.route('/')
-def index():
-    return render_template_string(HTML_UI)
-
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'files' not in request.files:
@@ -177,11 +173,15 @@ def upload():
         else:
             content = "Unsupported format"
             success = False
-            
+        
+        # Count total rows/lines
+        total_rows = len(content) if isinstance(content, list) else 0
+        
         results.append({
             "filename": f.filename,
             "success": success,
-            "data": content[:10] # Return first 10 rows/lines for preview
+            "total_rows": total_rows,
+            "data": content  # Send ALL data now
         })
         
         # Cleanup
@@ -189,6 +189,3 @@ def upload():
             os.remove(filepath)
 
     return jsonify({"results": results})
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
