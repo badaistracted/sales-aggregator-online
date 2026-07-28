@@ -156,79 +156,58 @@ def read_excel(path):
 
 def smart_ocr_to_table(lines):
     """
-    Convert OCR text lines into a structured table.
-
-    Expected pattern:
-      1. 01 March 2026, Sunday 330.685.175 Z 330.247.275
-
-    Output columns:
-      No | Date | Day | Value 1 | Value 2 | Noise
+    Convert OCR text lines into a table.
+    Only smart thing it does: keeps dates together as one cell.
+    Everything else stays exactly as OCR read it.
     """
-    import re
+    table_rows = []
 
-    rows = []
-
-    # Keep useful metadata lines at the top
-    meta_lines = []
-
-    # Data row pattern:
-    # 1. 01 March 2026, Sunday 330.685.175 Z 330.247.275
-    row_pattern = re.compile(
-        r"^\s*(\d+)[\.,]\s+"                       # 1.
-        r"(\d{1,2}\s+[A-Za-z]+\s+\d{4})"          # 01 March 2026
-        r",?\s+([A-Za-z]+)\s+"                    # Sunday
-        r"(.*)$"                                  # the rest
+    # Pattern to find: 01 March 2026
+    date_pattern = re.compile(
+        r"(\d{1,2})\s+(January|February|March|April|May|June|July|August|"
+        r"September|October|November|December|"
+        r"Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|"
+        r"September|Oktober|November|Desember)\s+(\d{4})",
+        re.IGNORECASE
     )
-
-    # Money-like number pattern:
-    money_pattern = re.compile(r"(?<!\d)(\d{1,3}(?:[.,]\d{3})+|\d{6,})(?!\d)")
 
     for line in lines:
         clean = str(line).strip()
         if not clean:
             continue
 
-        m = row_pattern.match(clean)
+        # Replace "01 March 2026" with a placeholder so it won't split
+        merged = clean
+        dates_found = date_pattern.findall(merged)
 
-        if m:
-            no = m.group(1)
-            full_date = m.group(2)
-            day_name = m.group(3)
-            tail = m.group(4)
+        for day, month, year in dates_found:
+            original = day + " " + month + " " + year
+            # Use a marker that won't appear naturally
+            placeholder = day + "_" + month + "_" + year
+            merged = merged.replace(original, placeholder, 1)
 
-            # Find all large numeric values in tail
-            amounts = money_pattern.findall(tail)
+        # Now split by whitespace
+        parts = re.split(r'\s+', merged)
 
-            value_1 = amounts[0] if len(amounts) > 0 else ""
-            value_2 = amounts[1] if len(amounts) > 1 else ""
+        # Restore the dates
+        restored = []
+        for part in parts:
+            if "_" in part and date_pattern.match(part.replace("_", " ")):
+                restored.append(part.replace("_", " "))
+            else:
+                restored.append(part)
 
-            # Remove extracted amounts from tail to leave OCR noise/markers
-            noise = tail
-            for amt in amounts[:2]:
-                noise = noise.replace(amt, " ", 1)
+        table_rows.append(restored)
 
-            noise = re.sub(r"\s+", " ", noise).strip(" -_:;,.")
-            rows.append([no, full_date, day_name, value_1, value_2, noise])
-
-        else:
-            # Treat non-data lines as metadata
-            meta_lines.append(clean)
-
-    # If no structured rows found, return None so caller can fall back
-    if not rows:
+    if not table_rows:
         return None, 0
 
-    # Put metadata above the table as padded rows
-    final_rows = []
+    max_cols = max(len(row) for row in table_rows)
+    for row in table_rows:
+        while len(row) < max_cols:
+            row.append("")
 
-    for meta in meta_lines[:5]:
-        final_rows.append([meta, "", "", "", "", ""])
-
-    # Optional header row inside preview
-    final_rows.append(["No", "Date", "Day", "Value 1", "Value 2", "Noise"])
-    final_rows.extend(rows)
-
-    return final_rows, 6
+    return table_rows, max_cols
 
 
 def read_pdf_ocr(path):
