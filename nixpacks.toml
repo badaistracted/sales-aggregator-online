@@ -1,8 +1,0 @@
-[phases.setup]
-nixPkgs = ["python311"]
-
-[phases.install]
-cmds = ["pip install flask openpyxl pandas numpy holidays werkzeug xlrd"]
-
-[start]
-cmd = "python phase5_dashboard.py"
