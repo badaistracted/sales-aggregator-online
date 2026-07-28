@@ -754,7 +754,7 @@ function renderCard(res, idx) {
 
     if (res.month_check) {
         if (res.month_check.status === "mismatch") card.classList.add("mismatch");
-        else if (res.month_check.match) card.classList.add("matched");
+        else if (res.month_check.status === "ok") card.classList.add("matched");
         else card.classList.add("warning");
     }
 
