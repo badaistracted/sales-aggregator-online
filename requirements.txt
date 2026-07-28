@@ -4,3 +4,5 @@ openpyxl
 xlrd
 pdfplumber
 werkzeug
+pytesseract
+pdf2image
