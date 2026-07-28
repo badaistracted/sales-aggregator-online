@@ -154,6 +154,47 @@ def read_excel(path):
         return {"type": "error", "message": "Excel Error: " + str(e)}
 
 
+def smart_ocr_to_table(lines):
+    """
+    Heuristic to convert OCR lines into a structured table.
+    It looks for lines starting with numbers (1., 2., etc) 
+    and splits columns based on whitespace landmarks.
+    """
+    table_rows = []
+    
+    # Common headers / noise to filter out from the data grid
+    skip_keywords = ["page", "laporan", "bulan", "total", "supermarket"]
+    
+    for line in lines:
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+            
+        # 1. Identify Data Rows: Look for lines starting with "1.", "01.", etc.
+        # Format: Index. Date, DayName Values
+        if re.match(r"^\d+[\.,]", clean_line):
+            # Split by whitespace, but keep the Date part relatively together
+            # Heuristic: Split parts that have 1 or more spaces
+            parts = re.split(r'\s+', clean_line)
+            table_rows.append(parts)
+        else:
+            # Metadata rows (Titles, headers) - treat as single-column for now
+            # so they show up at the top of the table
+            if not any(k in clean_line.lower() for k in skip_keywords):
+                table_rows.append([clean_line])
+
+    if not table_rows:
+        return None, 0
+
+    # Make the table "square" (all rows have the same number of columns)
+    max_cols = max(len(row) for row in table_rows)
+    for row in table_rows:
+        while len(row) < max_cols:
+            row.append("")
+            
+    return table_rows, max_cols
+
+
 def read_pdf_ocr(path):
     """Fallback: Convert PDF to images and run Tesseract OCR."""
     try:
@@ -169,9 +210,18 @@ def read_pdf_ocr(path):
                 text_lines.extend([l.strip() for l in text.split("\n") if l.strip()])
 
         if text_lines:
+            # ─── NEW: Convert raw text lines to a table ───────────
+            rows, cols = smart_ocr_to_table(text_lines)
+            if rows:
+                return {
+                    "type": "table", 
+                    "rows": rows, 
+                    "cols": cols,
+                    "is_ocr": True # Flag to show it was OCR'd
+                }
             return {"type": "text", "lines": text_lines}
 
-        return {"type": "error", "message": "PDF OCR: No text detected in scanned images."}
+        return {"type": "error", "message": "PDF OCR: No text detected."}
     except Exception as e:
         return {"type": "error", "message": "PDF OCR Error: " + str(e)}
 
@@ -188,12 +238,16 @@ def read_pdf(path):
                     for table in page_tables:
                         for row in table:
                             cleaned = [str(c).strip() if c else "" for c in row]
-                            tables_found.append(cleaned)
+                            # Only add if row isn't mostly empty
+                            if any(cleaned):
+                                tables_found.append(cleaned)
+                
+                # Also capture text for month detection
                 text = page.extract_text()
                 if text:
                     text_lines.extend([l.strip() for l in text.split("\n") if l.strip()])
 
-        # If we found structured data, return it
+        # Case 1: Digital PDF with structured tables
         if tables_found:
             max_cols = max(len(r) for r in tables_found)
             for r in tables_found:
@@ -201,14 +255,18 @@ def read_pdf(path):
                     r.append("")
             return {"type": "table", "rows": tables_found, "cols": max_cols}
 
-        if text_lines:
-            return {"type": "text", "lines": text_lines}
+        # Case 2: Digital PDF with only text (no table structure detected)
+        if text_lines and len(text_lines) > 5: # Some threshold to skip empty pages
+             # Try to see if the text lines look like a table
+             rows, cols = smart_ocr_to_table(text_lines)
+             if rows:
+                 return {"type": "table", "rows": rows, "cols": cols}
+             return {"type": "text", "lines": text_lines}
 
-        # ── No text found → Try OCR fallback ──────────────────────
+        # Case 3: Scanned PDF → Trigger OCR
         return read_pdf_ocr(path)
 
     except Exception as e:
-        # If pdfplumber crashes entirely, try OCR as last resort
         return read_pdf_ocr(path)
 
 # ─── HTML ────────────────────────────────────────────────────
