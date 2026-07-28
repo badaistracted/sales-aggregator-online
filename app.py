@@ -113,13 +113,13 @@ def validate_month(detected, target_year, target_month):
         else:
             others = [l for l in detected_labels if l != target_label]
             return {
-                "status": "ok_multi", "icon": "✅",
-                "message": "Contains " + target_label + " (also: " + ", ".join(others) + ")",
+                "status": "ok_multi", "icon": "⚠️",
+                "message": "Contains " + target_label + " but also has: " + ", ".join(others),
                 "match": True, "detected": detected_labels, "target": target_label,
             }
     else:
         return {
-            "status": "mismatch", "icon": "❌",
+            "status": "mismatch", "icon": "⚠️",
             "message": "WRONG MONTH — Expected " + target_label + " but found: " + ", ".join(detected_labels),
             "match": False, "detected": detected_labels, "target": target_label,
         }
@@ -769,7 +769,10 @@ function renderCard(res, idx) {
     var monthBadge = "";
     if (res.month_check) {
         var mc = res.month_check;
-        var mbClass = mc.match ? "mb-match" : mc.status === "mismatch" ? "mb-mismatch" : "mb-warn";
+        var mbClass;
+        if (mc.status === "ok") { mbClass = "mb-match"; }
+        else if (mc.status === "mismatch") { mbClass = "mb-mismatch"; }
+        else { mbClass = "mb-warn"; }
         var shortMsg = mc.message.length > 60 ? mc.message.substring(0, 57) + "..." : mc.message;
         monthBadge = '<span class="month-badge ' + mbClass + '">' + mc.icon + " " + esc(shortMsg) + '</span>';
     }
