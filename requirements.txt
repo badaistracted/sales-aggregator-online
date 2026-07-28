@@ -6,3 +6,4 @@ pdfplumber
 werkzeug
 pytesseract
 pdf2image
+holidays
