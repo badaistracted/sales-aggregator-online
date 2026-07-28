@@ -14,7 +14,7 @@ app = Flask(__name__)
 UPLOAD_FOLDER = Path("temp_uploads")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 
-# ─── MONTH DETECTION HELPERS ────────────────────────────────
+# ─── MONTH DETECTION ────────────────────────────────────────
 
 MONTH_NAMES = {
     "jan": 1, "january": 1, "januari": 1,
@@ -33,24 +33,16 @@ MONTH_NAMES = {
 
 
 def detect_months_in_text(text):
-    """
-    Scan a string for any month-year references.
-    Returns a set of (year, month) tuples found.
-    """
     text = str(text).lower().strip()
     found = set()
 
-    # Pattern: "Jan-25", "Dec 2025", "Januari-26", "Feb/26"
     for match in re.finditer(r"([a-z]+)[\s\-_/\.]+(\d{2,4})", text):
-        name = match.group(1)
-        yr = int(match.group(2))
-        if yr < 100:
-            yr += 2000
+        name, yr = match.group(1), int(match.group(2))
+        if yr < 100: yr += 2000
         mn = MONTH_NAMES.get(name)
         if mn and 2000 <= yr <= 2100:
             found.add((yr, mn))
 
-    # Pattern: "2025-01", "2025/12", "2025 Jan"
     for match in re.finditer(r"(\d{4})[\s\-_/\.]+([a-z]+|\d{1,2})", text):
         yr = int(match.group(1))
         m_str = match.group(2)
@@ -63,12 +55,9 @@ def detect_months_in_text(text):
             if mn and 2000 <= yr <= 2100:
                 found.add((yr, mn))
 
-    # Pattern: dates like "01/15/2025", "15-01-2025", "2025-01-15"
     for match in re.finditer(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", text):
         a, b, c = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        if c < 100:
-            c += 2000
-        # Could be DD/MM/YYYY or MM/DD/YYYY — try both
+        if c < 100: c += 2000
         if 1 <= b <= 12 and 2000 <= c <= 2100:
             found.add((c, b))
         if 1 <= a <= 12 and 2000 <= c <= 2100:
@@ -83,84 +72,56 @@ def detect_months_in_text(text):
 
 
 def detect_months_in_excel(rows):
-    """
-    Scan all cells in the Excel data for month-year references.
-    Returns a set of (year, month) tuples.
-    """
     found = set()
     for row in rows:
         for cell in row:
-            cell_str = str(cell).strip()
-            if not cell_str or cell_str in ("", "nan", "None"):
-                continue
-            found.update(detect_months_in_text(cell_str))
+            s = str(cell).strip()
+            if s and s not in ("", "nan", "None"):
+                found.update(detect_months_in_text(s))
     return found
 
 
 def detect_months_in_lines(lines):
-    """
-    Scan text lines (from PDF) for month-year references.
-    Returns a set of (year, month) tuples.
-    """
     found = set()
     for line in lines:
         found.update(detect_months_in_text(line))
     return found
 
 
-def validate_month(detected_months, target_year, target_month):
-    """
-    Check if the target month exists in the detected months.
-    Returns a status dict with match info.
-    """
+def validate_month(detected, target_year, target_month):
     target = (target_year, target_month)
     target_label = cal.month_name[target_month] + " " + str(target_year)
 
-    if not detected_months:
+    if not detected:
         return {
-            "status": "warning",
-            "icon": "⚠️",
-            "message": "No month/year references detected in this file. Cannot verify.",
-            "match": False,
-            "detected": [],
-            "target": target_label,
+            "status": "warning", "icon": "⚠️",
+            "message": "No month/year detected. Cannot verify.",
+            "match": False, "detected": [], "target": target_label,
         }
 
     detected_labels = sorted([
-        cal.month_name[m] + " " + str(y) for y, m in detected_months
+        cal.month_name[m] + " " + str(y) for y, m in detected
     ])
 
-    if target in detected_months:
-        # Perfect match
-        if len(detected_months) == 1:
+    if target in detected:
+        if len(detected) == 1:
             return {
-                "status": "ok",
-                "icon": "✅",
-                "message": "File matches: " + target_label,
-                "match": True,
-                "detected": detected_labels,
-                "target": target_label,
+                "status": "ok", "icon": "✅",
+                "message": "Matches: " + target_label,
+                "match": True, "detected": detected_labels, "target": target_label,
             }
         else:
-            # Contains target but also other months
             others = [l for l in detected_labels if l != target_label]
             return {
-                "status": "ok_multi",
-                "icon": "✅",
-                "message": "Contains " + target_label + " (also has: " + ", ".join(others) + ")",
-                "match": True,
-                "detected": detected_labels,
-                "target": target_label,
+                "status": "ok_multi", "icon": "✅",
+                "message": "Contains " + target_label + " (also: " + ", ".join(others) + ")",
+                "match": True, "detected": detected_labels, "target": target_label,
             }
     else:
-        # Wrong month
         return {
-            "status": "mismatch",
-            "icon": "❌",
-            "message": "WRONG MONTH — Expected " + target_label + " but file contains: " + ", ".join(detected_labels),
-            "match": False,
-            "detected": detected_labels,
-            "target": target_label,
+            "status": "mismatch", "icon": "❌",
+            "message": "WRONG MONTH — Expected " + target_label + " but found: " + ", ".join(detected_labels),
+            "match": False, "detected": detected_labels, "target": target_label,
         }
 
 
@@ -172,7 +133,7 @@ def read_excel(path):
         df = pd.read_excel(path, header=None, engine=engine).fillna("")
         rows = []
         for row in df.values.tolist():
-            rows.append([str(cell) if str(cell) != "" else "" for cell in row])
+            rows.append([str(c) if str(c) != "" else "" for c in row])
         return {"type": "table", "rows": rows, "cols": len(rows[0]) if rows else 0}
     except Exception as e:
         return {"type": "error", "message": "Excel Error: " + str(e)}
@@ -189,9 +150,8 @@ def read_pdf(path):
                 if page_tables:
                     for table in page_tables:
                         for row in table:
-                            cleaned = [str(cell).strip() if cell else "" for cell in row]
+                            cleaned = [str(c).strip() if c else "" for c in row]
                             tables_found.append(cleaned)
-
                 text = page.extract_text()
                 if text:
                     text_lines.extend([l.strip() for l in text.split("\n") if l.strip()])
@@ -206,12 +166,12 @@ def read_pdf(path):
         if text_lines:
             return {"type": "text", "lines": text_lines}
 
-        return {"type": "error", "message": "PDF: No text or tables found."}
+        return {"type": "error", "message": "PDF: No content found."}
     except Exception as e:
         return {"type": "error", "message": "PDF Error: " + str(e)}
 
 
-# ─── HTML UI ─────────────────────────────────────────────────
+# ─── HTML ────────────────────────────────────────────────────
 
 HTML_UI = r"""
 <!DOCTYPE html>
@@ -230,7 +190,7 @@ HTML_UI = r"""
         h1 { margin-bottom: 5px; }
         .subtitle { color: #94a3b8; margin-bottom: 25px; }
 
-        /* Config Card */
+        /* Config */
         .config-card {
             background: #1e293b;
             border: 1px solid #334155;
@@ -292,6 +252,46 @@ HTML_UI = r"""
         .drop-zone .icon { font-size: 3rem; margin-bottom: 10px; }
         .drop-zone p { color: #94a3b8; margin: 5px 0; }
         .drop-zone b { color: #93c5fd; }
+
+        /* Browse Buttons */
+        .browse-row {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+        .browse-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .browse-btn:hover { transform: translateY(-1px); }
+        .btn-files {
+            background: #3b82f6;
+            color: #fff;
+        }
+        .btn-files:hover { background: #2563eb; }
+        .btn-folder {
+            background: #10b981;
+            color: #fff;
+        }
+        .btn-folder:hover { background: #059669; }
+        .btn-clear {
+            background: transparent;
+            color: #94a3b8;
+            border: 1px solid #475569;
+        }
+        .btn-clear:hover { background: #263248; }
+
+        .hidden-input { display: none; }
 
         /* Loader */
         .loader {
@@ -387,7 +387,7 @@ HTML_UI = r"""
         .arrow { color: #64748b; transition: transform 0.2s; }
         .arrow.open { transform: rotate(180deg); }
 
-        /* Month validation bar */
+        /* Month bar */
         .month-bar {
             padding: 8px 15px;
             font-size: 0.82em;
@@ -470,7 +470,7 @@ HTML_UI = r"""
 <body>
 <div class="container">
     <h1>📂 Tenant Report Reader</h1>
-    <p class="subtitle">Upload tenant reports and validate they match your target month.</p>
+    <p class="subtitle">Upload tenant reports — drop a folder, select files, or both.</p>
 
     <!-- Month Selector -->
     <div class="config-card">
@@ -499,17 +499,31 @@ HTML_UI = r"""
             </div>
             <div class="month-preview">
                 Target: <b id="targetLabel">January 2026</b>
-                — files will be checked against this month
             </div>
         </div>
     </div>
 
-    <!-- Drop Zone -->
+    <!-- Upload Area -->
     <div class="drop-zone" id="dropZone">
         <div class="icon">📥</div>
-        <p><b>Drop folder here</b></p>
-        <p style="font-size: 0.85em;">Accepts .xlsx, .xls, and .pdf files</p>
+        <p><b>Drop files or folder here</b></p>
+        <p style="font-size: 0.85em;">Or use the buttons below</p>
     </div>
+
+    <div class="browse-row">
+        <button class="browse-btn btn-files" onclick="document.getElementById('fileInput').click()">
+            📄 Browse Files
+        </button>
+        <button class="browse-btn btn-folder" onclick="document.getElementById('folderInput').click()">
+            📁 Browse Folder
+        </button>
+        <button class="browse-btn btn-clear" onclick="clearAll()">
+            ↺ Clear All
+        </button>
+    </div>
+
+    <input type="file" id="fileInput" class="hidden-input" accept=".xlsx,.xls,.pdf" multiple />
+    <input type="file" id="folderInput" class="hidden-input" webkitdirectory />
 
     <div id="loader" class="loader">
         <span class="spinner"></span> Reading and validating files...
@@ -545,14 +559,16 @@ HTML_UI = r"""
 </div>
 
 <script>
-var dropZone = document.getElementById("dropZone");
-var fileList = document.getElementById("fileList");
-var loader   = document.getElementById("loader");
-var summary  = document.getElementById("summary");
+var dropZone    = document.getElementById("dropZone");
+var fileList    = document.getElementById("fileList");
+var loader      = document.getElementById("loader");
+var summaryEl   = document.getElementById("summary");
+var fileInput   = document.getElementById("fileInput");
+var folderInput = document.getElementById("folderInput");
 
-// Update target label when month/year changes
+// Month label
 function updateLabel() {
-    var months = ["", "January","February","March","April","May","June",
+    var months = ["","January","February","March","April","May","June",
                   "July","August","September","October","November","December"];
     var m = parseInt(document.getElementById("monthSel").value);
     var y = document.getElementById("yearIn").value;
@@ -560,14 +576,13 @@ function updateLabel() {
 }
 document.getElementById("monthSel").addEventListener("change", updateLabel);
 document.getElementById("yearIn").addEventListener("input", updateLabel);
-
-// Set defaults
 var now = new Date();
 document.getElementById("monthSel").value = now.getMonth() + 1;
 document.getElementById("yearIn").value = now.getFullYear();
 updateLabel();
 
-// Drop zone
+// ─── DRAG AND DROP (files or folders) ───────────────────────
+
 dropZone.addEventListener("dragover", function(e) {
     e.preventDefault();
     dropZone.classList.add("hover");
@@ -579,34 +594,57 @@ dropZone.addEventListener("dragleave", function() {
 dropZone.addEventListener("drop", async function(e) {
     e.preventDefault();
     dropZone.classList.remove("hover");
-    fileList.innerHTML = "";
-    summary.style.display = "none";
-    loader.style.display = "block";
 
     var items = e.dataTransfer.items;
     var formData = new FormData();
 
     for (var i = 0; i < items.length; i++) {
-        var item = items[i].webkitGetAsEntry();
-        if (item) {
-            await walkTree(item, formData, "");
+        var entry = items[i].webkitGetAsEntry();
+        if (entry) {
+            await walkTree(entry, formData, "");
         }
     }
 
-    // Add month/year to the request
-    formData.append("month", document.getElementById("monthSel").value);
-    formData.append("year", document.getElementById("yearIn").value);
-
-    try {
-        var resp = await fetch("/upload", { method: "POST", body: formData });
-        var data = await resp.json();
-        loader.style.display = "none";
-        renderAll(data);
-    } catch (err) {
-        loader.style.display = "none";
-        alert("Error: " + err.message);
-    }
+    sendFiles(formData);
 });
+
+// ─── BROWSE FILES BUTTON ────────────────────────────────────
+
+fileInput.addEventListener("change", function() {
+    var files = fileInput.files;
+    if (!files.length) return;
+
+    var formData = new FormData();
+    for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var name = f.name.toLowerCase();
+        if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".pdf")) {
+            formData.append("files", f, f.name);
+        }
+    }
+    fileInput.value = "";
+    sendFiles(formData);
+});
+
+// ─── BROWSE FOLDER BUTTON ───────────────────────────────────
+
+folderInput.addEventListener("change", function() {
+    var files = folderInput.files;
+    if (!files.length) return;
+
+    var formData = new FormData();
+    for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var name = f.name.toLowerCase();
+        if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".pdf")) {
+            formData.append("files", f, f.webkitRelativePath || f.name);
+        }
+    }
+    folderInput.value = "";
+    sendFiles(formData);
+});
+
+// ─── SHARED: Walk folder tree (for drag-drop) ──────────────
 
 function walkTree(item, formData, path) {
     return new Promise(function(resolve) {
@@ -644,6 +682,37 @@ function readAllEntries(reader, callback) {
     batch();
 }
 
+// ─── SHARED: Send to server ─────────────────────────────────
+
+async function sendFiles(formData) {
+    fileList.innerHTML = "";
+    summaryEl.style.display = "none";
+    loader.style.display = "block";
+
+    formData.append("month", document.getElementById("monthSel").value);
+    formData.append("year", document.getElementById("yearIn").value);
+
+    try {
+        var resp = await fetch("/upload", { method: "POST", body: formData });
+        var data = await resp.json();
+        loader.style.display = "none";
+        renderAll(data);
+    } catch (err) {
+        loader.style.display = "none";
+        alert("Error: " + err.message);
+    }
+}
+
+// ─── CLEAR ──────────────────────────────────────────────────
+
+function clearAll() {
+    fileList.innerHTML = "";
+    summaryEl.style.display = "none";
+    loader.style.display = "none";
+}
+
+// ─── RENDER ─────────────────────────────────────────────────
+
 function renderAll(data) {
     if (data.error) { alert(data.error); return; }
 
@@ -665,9 +734,8 @@ function renderAll(data) {
     document.getElementById("sFail").textContent  = fail;
     document.getElementById("sMatch").textContent = matched;
     document.getElementById("sWrong").textContent = wrong;
-    summary.style.display = "block";
+    summaryEl.style.display = "block";
 
-    // Sort: mismatches first, then warnings, then matches
     results.sort(function(a, b) {
         var order = {"mismatch": 0, "warning": 1, "ok_multi": 2, "ok": 3};
         var sa = a.month_check ? (order[a.month_check.status] || 3) : 3;
@@ -676,15 +744,14 @@ function renderAll(data) {
     });
 
     for (var i = 0; i < results.length; i++) {
-        renderFileCard(results[i], i);
+        renderCard(results[i], i);
     }
 }
 
-function renderFileCard(res, idx) {
+function renderCard(res, idx) {
     var card = document.createElement("div");
     card.className = "file-card";
 
-    // Card border color based on month match
     if (res.month_check) {
         if (res.month_check.status === "mismatch") card.classList.add("mismatch");
         else if (res.month_check.match) card.classList.add("matched");
@@ -696,20 +763,20 @@ function renderFileCard(res, idx) {
     var statusClass = res.success ? "b-ok" : "b-fail";
     var statusText  = res.success ? "OK" : "FAIL";
     var rowText = (res.total_rows || 0).toLocaleString() + " rows";
-    var previewId = "pv_" + idx;
-    var arrowId   = "ar_" + idx;
+    var pvId = "pv_" + idx;
+    var arId = "ar_" + idx;
 
-    // Month badge
     var monthBadge = "";
     if (res.month_check) {
         var mc = res.month_check;
         var mbClass = mc.match ? "mb-match" : mc.status === "mismatch" ? "mb-mismatch" : "mb-warn";
-        monthBadge = '<span class="month-badge ' + mbClass + '">' + mc.icon + " " + esc(mc.message).substring(0, 60) + '</span>';
+        var shortMsg = mc.message.length > 60 ? mc.message.substring(0, 57) + "..." : mc.message;
+        monthBadge = '<span class="month-badge ' + mbClass + '">' + mc.icon + " " + esc(shortMsg) + '</span>';
     }
 
     var header = document.createElement("div");
     header.className = "file-header";
-    header.setAttribute("onclick", "toggleCard('" + previewId + "','" + arrowId + "')");
+    header.setAttribute("onclick", "toggle('" + pvId + "','" + arId + "')");
     header.innerHTML =
         '<div class="file-info">' +
             '<span class="badge ' + extClass + '">' + ext.toUpperCase() + '</span>' +
@@ -719,57 +786,49 @@ function renderFileCard(res, idx) {
         '</div>' +
         '<div style="display:flex;align-items:center;gap:10px">' +
             '<span class="row-count">' + rowText + '</span>' +
-            '<span class="arrow" id="' + arrowId + '">▼</span>' +
+            '<span class="arrow" id="' + arId + '">▼</span>' +
         '</div>';
 
-    // Month validation bar
-    var monthBar = "";
+    card.appendChild(header);
+
     if (res.month_check) {
         var mc = res.month_check;
         var barClass = mc.match ? "match" : mc.status === "mismatch" ? "mismatch" : "warn";
-        var detectedStr = mc.detected.length > 0 ? "Detected: " + mc.detected.join(", ") : "No months detected";
-        monthBar = '<div class="month-bar ' + barClass + '">' +
-            '<span>' + mc.icon + ' ' + esc(mc.message) + '</span>' +
-            '<span class="detected-list">' + esc(detectedStr) + '</span>' +
-        '</div>';
+        var detStr = mc.detected.length > 0 ? "Detected: " + mc.detected.join(", ") : "No months detected";
+        var bar = document.createElement("div");
+        bar.className = "month-bar " + barClass;
+        bar.innerHTML = '<span>' + mc.icon + ' ' + esc(mc.message) + '</span>' +
+            '<span class="detected-list">' + esc(detStr) + '</span>';
+        card.appendChild(bar);
     }
 
-    var previewArea = document.createElement("div");
-    previewArea.className = "preview-area";
-    previewArea.id = previewId;
+    var preview = document.createElement("div");
+    preview.className = "preview-area";
+    preview.id = pvId;
 
     if (!res.success) {
-        previewArea.innerHTML = '<div class="error-preview">' + esc(res.error_message || "Unknown error") + '</div>';
+        preview.innerHTML = '<div class="error-preview">' + esc(res.error_message || "Unknown error") + '</div>';
     } else if (res.data_type === "table") {
-        previewArea.innerHTML = buildTable(res.data_rows, res.data_cols);
+        preview.innerHTML = buildTable(res.data_rows, res.data_cols);
     } else if (res.data_type === "text") {
-        previewArea.innerHTML = buildText(res.data_lines);
+        preview.innerHTML = buildText(res.data_lines);
     }
 
-    card.appendChild(header);
-    if (monthBar) {
-        var barDiv = document.createElement("div");
-        barDiv.innerHTML = monthBar;
-        card.appendChild(barDiv.firstChild);
-    }
-    card.appendChild(previewArea);
+    card.appendChild(preview);
     fileList.appendChild(card);
 }
 
 function buildTable(rows, numCols) {
-    var html = '<table class="data-table"><thead><tr>';
-    html += '<th class="row-num">#</th>';
+    var html = '<table class="data-table"><thead><tr><th class="row-num">#</th>';
     for (var c = 0; c < numCols; c++) {
-        var letter = "";
+        var letter;
         if (c < 26) { letter = String.fromCharCode(65 + c); }
         else { letter = String.fromCharCode(64 + Math.floor(c/26)) + String.fromCharCode(65 + (c % 26)); }
         html += '<th>' + letter + '</th>';
     }
     html += '</tr></thead><tbody>';
-
     for (var r = 0; r < rows.length; r++) {
-        html += '<tr>';
-        html += '<td class="row-num">' + (r + 1) + '</td>';
+        html += '<tr><td class="row-num">' + (r+1) + '</td>';
         for (var c = 0; c < numCols; c++) {
             var val = c < rows[r].length ? rows[r][c] : "";
             if (val === "" || val === "nan" || val === "None") {
@@ -787,15 +846,15 @@ function buildTable(rows, numCols) {
 function buildText(lines) {
     var html = '<div class="text-preview">';
     for (var i = 0; i < lines.length; i++) {
-        html += '<span class="line-num">' + (i + 1) + '</span>' + esc(lines[i]) + '\n';
+        html += '<span class="line-num">' + (i+1) + '</span>' + esc(lines[i]) + '\n';
     }
     html += '</div>';
     return html;
 }
 
-function toggleCard(previewId, arrowId) {
-    var el = document.getElementById(previewId);
-    var ar = document.getElementById(arrowId);
+function toggle(pvId, arId) {
+    var el = document.getElementById(pvId);
+    var ar = document.getElementById(arId);
     if (el.style.display === "block") {
         el.style.display = "none";
         ar.classList.remove("open");
@@ -830,7 +889,6 @@ def upload():
 
     files = request.files.getlist("files")
 
-    # Get target month/year
     try:
         target_month = int(request.form.get("month", 1))
         target_year  = int(request.form.get("year", datetime.now().year))
@@ -871,20 +929,14 @@ def upload():
             entry["data_rows"]  = data["rows"]
             entry["data_cols"]  = data["cols"]
             entry["total_rows"] = len(data["rows"])
-
-            # Month detection on table data
             detected = detect_months_in_excel(data["rows"])
-            # Also check filename
             detected.update(detect_months_in_text(f.filename))
             entry["month_check"] = validate_month(detected, target_year, target_month)
-
         elif data["type"] == "text":
             entry["success"]    = True
             entry["data_type"]  = "text"
             entry["data_lines"] = data["lines"]
             entry["total_rows"] = len(data["lines"])
-
-            # Month detection on text lines
             detected = detect_months_in_lines(data["lines"])
             detected.update(detect_months_in_text(f.filename))
             entry["month_check"] = validate_month(detected, target_year, target_month)
