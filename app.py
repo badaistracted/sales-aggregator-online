@@ -36,36 +36,51 @@ def detect_months_in_text(text):
     text = str(text).lower().strip()
     found = set()
 
-    for match in re.finditer(r"([a-z]+)[\s\-_/\.]+(\d{2,4})", text):
-        name, yr = match.group(1), int(match.group(2))
-        if yr < 100: yr += 2000
+    if not text or text in ("nan", "none", ""):
+        return found
+
+    # Skip if text is just a plain number (row numbers, quantities, etc.)
+    clean = text.replace(",", "").replace(".", "").strip()
+    if clean.isdigit():
+        return found
+
+    # Pattern 1: "Jan-26", "Dec 2025", "Januari-26", "Feb/26"
+    for match in re.finditer(r"([a-z]{3,})[\s\-_/\.]+(\d{2,4})", text):
+        name = match.group(1)
+        yr = int(match.group(2))
+        if yr < 100:
+            yr += 2000
         mn = MONTH_NAMES.get(name)
-        if mn and 2000 <= yr <= 2100:
+        if mn and 2020 <= yr <= 2035:
             found.add((yr, mn))
 
-    for match in re.finditer(r"(\d{4})[\s\-_/\.]+([a-z]+|\d{1,2})", text):
+    # Pattern 2: "2025-01", "2025/12"
+    for match in re.finditer(r"(\d{4})[\s\-_/\.]+(\d{1,2})(?!\d)", text):
         yr = int(match.group(1))
-        m_str = match.group(2)
-        if m_str.isdigit():
-            mn = int(m_str)
-            if 1 <= mn <= 12 and 2000 <= yr <= 2100:
-                found.add((yr, mn))
-        else:
-            mn = MONTH_NAMES.get(m_str)
-            if mn and 2000 <= yr <= 2100:
-                found.add((yr, mn))
+        mn = int(match.group(2))
+        if 1 <= mn <= 12 and 2020 <= yr <= 2035:
+            found.add((yr, mn))
 
-    for match in re.finditer(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", text):
+    # Pattern 3: "2025 January", "2025-Jan"
+    for match in re.finditer(r"(\d{4})[\s\-_/\.]+([a-z]{3,})", text):
+        yr = int(match.group(1))
+        mn = MONTH_NAMES.get(match.group(2))
+        if mn and 2020 <= yr <= 2035:
+            found.add((yr, mn))
+
+    # Pattern 4: Full dates with 4-digit year only
+    # "01/05/2026", "2026-05-01"
+    for match in re.finditer(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})", text):
         a, b, c = int(match.group(1)), int(match.group(2)), int(match.group(3))
-        if c < 100: c += 2000
-        if 1 <= b <= 12 and 2000 <= c <= 2100:
-            found.add((c, b))
-        if 1 <= a <= 12 and 2000 <= c <= 2100:
-            found.add((c, a))
+        if 2020 <= c <= 2035:
+            if 1 <= b <= 12:
+                found.add((c, b))
+            if 1 <= a <= 12 and a != b:
+                found.add((c, a))
 
     for match in re.finditer(r"(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", text):
         yr, mn = int(match.group(1)), int(match.group(2))
-        if 1 <= mn <= 12 and 2000 <= yr <= 2100:
+        if 1 <= mn <= 12 and 2020 <= yr <= 2035:
             found.add((yr, mn))
 
     return found
