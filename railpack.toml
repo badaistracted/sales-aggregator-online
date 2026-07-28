@@ -1,5 +1,0 @@
-# railpack.toml
-
-[packages.apt]
-# Install Tesseract OCR engine
-packages = ["tesseract-ocr", "tesseract-ocr-eng"]
