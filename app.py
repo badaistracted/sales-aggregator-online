@@ -156,43 +156,79 @@ def read_excel(path):
 
 def smart_ocr_to_table(lines):
     """
-    Heuristic to convert OCR lines into a structured table.
-    It looks for lines starting with numbers (1., 2., etc) 
-    and splits columns based on whitespace landmarks.
-    """
-    table_rows = []
-    
-    # Common headers / noise to filter out from the data grid
-    skip_keywords = ["page", "laporan", "bulan", "total", "supermarket"]
-    
-    for line in lines:
-        clean_line = line.strip()
-        if not clean_line:
-            continue
-            
-        # 1. Identify Data Rows: Look for lines starting with "1.", "01.", etc.
-        # Format: Index. Date, DayName Values
-        if re.match(r"^\d+[\.,]", clean_line):
-            # Split by whitespace, but keep the Date part relatively together
-            # Heuristic: Split parts that have 1 or more spaces
-            parts = re.split(r'\s+', clean_line)
-            table_rows.append(parts)
-        else:
-            # Metadata rows (Titles, headers) - treat as single-column for now
-            # so they show up at the top of the table
-            if not any(k in clean_line.lower() for k in skip_keywords):
-                table_rows.append([clean_line])
+    Convert OCR text lines into a structured table.
 
-    if not table_rows:
+    Expected pattern:
+      1. 01 March 2026, Sunday 330.685.175 Z 330.247.275
+
+    Output columns:
+      No | Date | Day | Value 1 | Value 2 | Noise
+    """
+    import re
+
+    rows = []
+
+    # Keep useful metadata lines at the top
+    meta_lines = []
+
+    # Data row pattern:
+    # 1. 01 March 2026, Sunday 330.685.175 Z 330.247.275
+    row_pattern = re.compile(
+        r"^\s*(\d+)[\.,]\s+"                       # 1.
+        r"(\d{1,2}\s+[A-Za-z]+\s+\d{4})"          # 01 March 2026
+        r",?\s+([A-Za-z]+)\s+"                    # Sunday
+        r"(.*)$"                                  # the rest
+    )
+
+    # Money-like number pattern:
+    money_pattern = re.compile(r"(?<!\d)(\d{1,3}(?:[.,]\d{3})+|\d{6,})(?!\d)")
+
+    for line in lines:
+        clean = str(line).strip()
+        if not clean:
+            continue
+
+        m = row_pattern.match(clean)
+
+        if m:
+            no = m.group(1)
+            full_date = m.group(2)
+            day_name = m.group(3)
+            tail = m.group(4)
+
+            # Find all large numeric values in tail
+            amounts = money_pattern.findall(tail)
+
+            value_1 = amounts[0] if len(amounts) > 0 else ""
+            value_2 = amounts[1] if len(amounts) > 1 else ""
+
+            # Remove extracted amounts from tail to leave OCR noise/markers
+            noise = tail
+            for amt in amounts[:2]:
+                noise = noise.replace(amt, " ", 1)
+
+            noise = re.sub(r"\s+", " ", noise).strip(" -_:;,.")
+            rows.append([no, full_date, day_name, value_1, value_2, noise])
+
+        else:
+            # Treat non-data lines as metadata
+            meta_lines.append(clean)
+
+    # If no structured rows found, return None so caller can fall back
+    if not rows:
         return None, 0
 
-    # Make the table "square" (all rows have the same number of columns)
-    max_cols = max(len(row) for row in table_rows)
-    for row in table_rows:
-        while len(row) < max_cols:
-            row.append("")
-            
-    return table_rows, max_cols
+    # Put metadata above the table as padded rows
+    final_rows = []
+
+    for meta in meta_lines[:5]:
+        final_rows.append([meta, "", "", "", "", ""])
+
+    # Optional header row inside preview
+    final_rows.append(["No", "Date", "Day", "Value 1", "Value 2", "Noise"])
+    final_rows.extend(rows)
+
+    return final_rows, 6
 
 
 def read_pdf_ocr(path):
