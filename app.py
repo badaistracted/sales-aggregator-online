@@ -16,22 +16,53 @@ def read_excel(path):
     try:
         engine = "xlrd" if path.suffix == ".xls" else "openpyxl"
         df = pd.read_excel(path, header=None, engine=engine).fillna("")
-        return df.values.tolist()
+        rows = df.values.tolist()
+        # Convert every cell to string for safe JSON
+        cleaned = []
+        for row in rows:
+            cleaned.append([str(cell) if str(cell) != "" else "" for cell in row])
+        return {"type": "table", "rows": cleaned, "cols": len(cleaned[0]) if cleaned else 0}
     except Exception as e:
-        return f"Excel Error: {str(e)}"
+        return {"type": "error", "message": f"Excel Error: {str(e)}"}
 
 
 def read_pdf(path):
     try:
-        lines = []
+        # First try to extract tables
+        tables_found = []
+        text_lines = []
+
         with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
+            for page_num, page in enumerate(pdf.pages):
+                # Try table extraction first
+                page_tables = page.extract_tables()
+                if page_tables:
+                    for table in page_tables:
+                        for row in table:
+                            cleaned_row = [str(cell).strip() if cell else "" for cell in row]
+                            tables_found.append(cleaned_row)
+
+                # Also get raw text as fallback
                 text = page.extract_text()
                 if text:
-                    lines.extend([l.strip() for l in text.split("\n") if l.strip()])
-        return lines if lines else "PDF Error: No text found."
+                    text_lines.extend([l.strip() for l in text.split("\n") if l.strip()])
+
+        # If we found tables, return as table format
+        if tables_found:
+            max_cols = max(len(row) for row in tables_found)
+            # Pad rows to same length
+            for row in tables_found:
+                while len(row) < max_cols:
+                    row.append("")
+            return {"type": "table", "rows": tables_found, "cols": max_cols}
+
+        # Otherwise return as text lines
+        if text_lines:
+            return {"type": "text", "lines": text_lines}
+
+        return {"type": "error", "message": "PDF: No text or tables found."}
     except Exception as e:
-        return f"PDF Error: {str(e)}"
+        return {"type": "error", "message": f"PDF Error: {str(e)}"}
 
 
 HTML_UI = r"""
@@ -45,151 +76,230 @@ HTML_UI = r"""
             background: #0f172a;
             color: #e2e8f0;
             padding: 40px;
+            margin: 0;
         }
-        .container { max-width: 1000px; margin: 0 auto; }
+        .container { max-width: 1200px; margin: 0 auto; }
 
+        h1 { margin-bottom: 5px; }
+        .subtitle { color: #94a3b8; margin-bottom: 25px; }
+
+        /* Drop Zone */
         .drop-zone {
             border: 3px dashed #3b82f6;
             border-radius: 20px;
-            padding: 60px;
+            padding: 50px;
             text-align: center;
             cursor: pointer;
             background: rgba(59, 130, 246, 0.05);
             transition: 0.3s;
         }
         .drop-zone.hover {
-            background: rgba(59, 130, 246, 0.2);
+            background: rgba(59, 130, 246, 0.15);
             border-color: #60a5fa;
+            transform: scale(1.01);
         }
+        .drop-zone .icon { font-size: 3rem; margin-bottom: 10px; }
+        .drop-zone p { color: #94a3b8; margin: 5px 0; }
+        .drop-zone b { color: #93c5fd; }
 
+        /* Loader */
+        .loader {
+            display: none;
+            text-align: center;
+            color: #3b82f6;
+            font-weight: bold;
+            margin-top: 15px;
+            padding: 15px;
+        }
+        .spinner {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid #3b82f6;
+            border-top: 2px solid transparent;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Summary Bar */
         .summary {
             margin-top: 20px;
-            padding: 15px;
-            background: #1e293b;
-            border-radius: 10px;
-            border: 1px solid #334155;
             display: none;
         }
         .summary-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 10px;
-            margin-top: 10px;
         }
         .summary-card {
-            background: #263248;
-            padding: 12px;
-            border-radius: 8px;
+            background: #1e293b;
+            border: 1px solid #334155;
+            padding: 15px;
+            border-radius: 10px;
             text-align: center;
         }
         .summary-card .num {
-            font-size: 1.8rem;
+            font-size: 1.6rem;
             font-weight: bold;
-            color: #3b82f6;
         }
         .summary-card .label {
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             color: #94a3b8;
             margin-top: 4px;
         }
+        .c-blue { color: #3b82f6; }
+        .c-green { color: #10b981; }
+        .c-red { color: #ef4444; }
+        .c-yellow { color: #f59e0b; }
 
+        /* File Cards */
         .file-list { margin-top: 20px; }
-
         .file-card {
             background: #1e293b;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 12px;
             border: 1px solid #334155;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            overflow: hidden;
         }
         .file-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 12px 15px;
             cursor: pointer;
+            transition: background 0.2s;
         }
+        .file-header:hover { background: #263248; }
         .file-info { display: flex; align-items: center; gap: 10px; }
 
+        /* Badges */
         .badge {
-            font-size: 0.75em;
+            font-size: 0.7em;
             padding: 3px 8px;
             border-radius: 4px;
             font-weight: bold;
+            letter-spacing: 0.5px;
         }
-        .badge.ok { background: #10b981; color: #000; }
-        .badge.fail { background: #ef4444; color: #fff; }
-        .badge.xlsx { background: #2563eb; color: #fff; }
-        .badge.xls { background: #7c3aed; color: #fff; }
-        .badge.pdf { background: #f59e0b; color: #000; }
+        .b-xlsx { background: #2563eb; color: #fff; }
+        .b-xls  { background: #7c3aed; color: #fff; }
+        .b-pdf  { background: #f59e0b; color: #000; }
+        .b-ok   { background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid #10b981; }
+        .b-fail { background: rgba(239,68,68,0.2); color: #ef4444; border: 1px solid #ef4444; }
 
-        .row-count {
-            font-size: 0.85em;
-            color: #94a3b8;
-            font-weight: bold;
-        }
+        .row-count { font-size: 0.82em; color: #94a3b8; }
+        .arrow { color: #64748b; transition: transform 0.2s; }
+        .arrow.open { transform: rotate(180deg); }
 
-        .preview {
-            font-family: monospace;
-            font-size: 0.75em;
-            background: #000;
-            padding: 10px;
-            border-radius: 5px;
-            max-height: 400px;
+        /* Preview Area */
+        .preview-area {
+            display: none;
+            border-top: 1px solid #334155;
+            max-height: 500px;
             overflow: auto;
-            color: #10b981;
-            white-space: pre;
-            border: 1px solid #334155;
-            margin-top: 10px;
-            display: none;
+            background: #0c1222;
         }
 
-        .loader {
-            display: none;
-            color: #3b82f6;
-            font-weight: bold;
-            margin-top: 15px;
-            text-align: center;
+        /* Table Preview */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8em;
+            font-family: "Consolas", "Courier New", monospace;
         }
-        .spinner {
+        .data-table th {
+            background: #1a3a5c;
+            color: #93c5fd;
+            padding: 6px 10px;
+            text-align: left;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            border-bottom: 2px solid #2563eb;
+            white-space: nowrap;
+        }
+        .data-table td {
+            padding: 5px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: #cbd5e1;
+            white-space: nowrap;
+        }
+        .data-table tr:hover td {
+            background: rgba(59, 130, 246, 0.08);
+        }
+        .data-table .row-num {
+            color: #475569;
+            text-align: right;
+            padding-right: 12px;
+            font-size: 0.85em;
+            user-select: none;
+            border-right: 1px solid #334155;
+            background: #111827;
+        }
+        .data-table .cell-empty {
+            color: #334155;
+            font-style: italic;
+        }
+
+        /* Text Preview (for PDFs without tables) */
+        .text-preview {
+            padding: 15px;
+            font-family: monospace;
+            font-size: 0.8em;
+            color: #10b981;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+        .text-preview .line-num {
             display: inline-block;
-            width: 12px; height: 12px;
-            border: 2px solid #3b82f6;
-            border-top: 2px solid transparent;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-            margin-right: 6px;
-            vertical-align: middle;
+            width: 40px;
+            color: #475569;
+            text-align: right;
+            margin-right: 12px;
+            user-select: none;
         }
-        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Error Preview */
+        .error-preview {
+            padding: 15px;
+            color: #ef4444;
+            font-size: 0.85em;
+        }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>📂 Phase 1: Folder Reader</h1>
-    <p>Drag and drop a <b>folder</b> containing Tenant Excel (.xlsx, .xls) or PDF files.</p>
+    <h1>📂 Tenant Report Reader</h1>
+    <p class="subtitle">Drag and drop a folder containing tenant Excel or PDF reports.</p>
 
     <div class="drop-zone" id="dropZone">
-        <div style="font-size: 3rem;">📥</div>
-        <p>Drop Folder Here</p>
+        <div class="icon">📥</div>
+        <p><b>Drop folder here</b></p>
+        <p style="font-size: 0.85em;">Accepts .xlsx, .xls, and .pdf files</p>
     </div>
 
     <div id="loader" class="loader">
-        <span class="spinner"></span> Reading files...
+        <span class="spinner"></span> Reading files, please wait...
     </div>
 
     <div class="summary" id="summary">
-        <b>📊 Upload Summary</b>
         <div class="summary-grid">
             <div class="summary-card">
-                <div class="num" id="totalFiles">0</div>
-                <div class="label">Files Read</div>
+                <div class="num c-blue" id="sTotal">0</div>
+                <div class="label">Total Files</div>
             </div>
             <div class="summary-card">
-                <div class="num" id="totalSuccess" style="color:#10b981">0</div>
-                <div class="label">Successful</div>
+                <div class="num c-green" id="sOk">0</div>
+                <div class="label">Read OK</div>
             </div>
             <div class="summary-card">
-                <div class="num" id="totalRows" style="color:#f59e0b">0</div>
+                <div class="num c-red" id="sFail">0</div>
+                <div class="label">Failed</div>
+            </div>
+            <div class="summary-card">
+                <div class="num c-yellow" id="sRows">0</div>
                 <div class="label">Total Rows</div>
             </div>
         </div>
@@ -199,16 +309,15 @@ HTML_UI = r"""
 </div>
 
 <script>
-const dropZone = document.getElementById("dropZone");
-const fileList = document.getElementById("fileList");
-const loader   = document.getElementById("loader");
-const summary  = document.getElementById("summary");
+var dropZone = document.getElementById("dropZone");
+var fileList = document.getElementById("fileList");
+var loader   = document.getElementById("loader");
+var summary  = document.getElementById("summary");
 
 dropZone.addEventListener("dragover", function(e) {
     e.preventDefault();
     dropZone.classList.add("hover");
 });
-
 dropZone.addEventListener("dragleave", function() {
     dropZone.classList.remove("hover");
 });
@@ -222,27 +331,26 @@ dropZone.addEventListener("drop", async function(e) {
 
     var items = e.dataTransfer.items;
     var formData = new FormData();
-    var fileCount = 0;
 
     for (var i = 0; i < items.length; i++) {
         var item = items[i].webkitGetAsEntry();
         if (item) {
-            await traverseTree(item, formData, "");
+            await walkTree(item, formData, "");
         }
     }
 
     try {
-        var response = await fetch("/upload", { method: "POST", body: formData });
-        var result = await response.json();
+        var resp = await fetch("/upload", { method: "POST", body: formData });
+        var data = await resp.json();
         loader.style.display = "none";
-        showResults(result);
+        renderAll(data);
     } catch (err) {
         loader.style.display = "none";
         alert("Error: " + err.message);
     }
 });
 
-function traverseTree(item, formData, path) {
+function walkTree(item, formData, path) {
     return new Promise(function(resolve) {
         if (item.isFile) {
             item.file(function(file) {
@@ -254,10 +362,10 @@ function traverseTree(item, formData, path) {
             });
         } else if (item.isDirectory) {
             var reader = item.createReader();
-            reader.readEntries(function(entries) {
+            readAllEntries(reader, function(entries) {
                 var promises = [];
                 for (var i = 0; i < entries.length; i++) {
-                    promises.push(traverseTree(entries[i], formData, path + item.name + "/"));
+                    promises.push(walkTree(entries[i], formData, path + item.name + "/"));
                 }
                 Promise.all(promises).then(resolve);
             });
@@ -267,80 +375,138 @@ function traverseTree(item, formData, path) {
     });
 }
 
-function showResults(data) {
-    if (data.error) {
-        alert(data.error);
-        return;
+function readAllEntries(reader, callback) {
+    var allEntries = [];
+    function readBatch() {
+        reader.readEntries(function(entries) {
+            if (entries.length === 0) {
+                callback(allEntries);
+            } else {
+                allEntries = allEntries.concat(Array.from(entries));
+                readBatch();
+            }
+        });
     }
+    readBatch();
+}
 
-    var results    = data.results;
-    var totalFiles = results.length;
-    var totalOk    = 0;
-    var totalRows  = 0;
+function renderAll(data) {
+    if (data.error) { alert(data.error); return; }
+
+    var results = data.results;
+    var total = results.length;
+    var ok = 0;
+    var fail = 0;
+    var rows = 0;
 
     for (var i = 0; i < results.length; i++) {
-        if (results[i].success) totalOk++;
-        totalRows += results[i].total_rows || 0;
+        if (results[i].success) { ok++; } else { fail++; }
+        rows += results[i].total_rows || 0;
     }
 
-    document.getElementById("totalFiles").textContent   = totalFiles;
-    document.getElementById("totalSuccess").textContent  = totalOk;
-    document.getElementById("totalRows").textContent     = totalRows.toLocaleString();
+    document.getElementById("sTotal").textContent = total;
+    document.getElementById("sOk").textContent    = ok;
+    document.getElementById("sFail").textContent   = fail;
+    document.getElementById("sRows").textContent   = rows.toLocaleString();
     summary.style.display = "block";
 
     for (var i = 0; i < results.length; i++) {
-        var res = results[i];
-        var card = document.createElement("div");
-        card.className = "file-card";
-
-        var ext = res.filename.split(".").pop().toLowerCase();
-        var badgeType = ext === "pdf" ? "pdf" : ext === "xls" ? "xls" : "xlsx";
-        var statusBadge = res.success ? "ok" : "fail";
-        var statusText  = res.success ? "✅ OK" : "❌ FAIL";
-
-        var previewLines = "";
-        if (Array.isArray(res.data)) {
-            for (var j = 0; j < res.data.length; j++) {
-                var row = res.data[j];
-                if (Array.isArray(row)) {
-                    previewLines += row.join("  |  ") + "\n";
-                } else {
-                    previewLines += row + "\n";
-                }
-            }
-        } else {
-            previewLines = String(res.data);
-        }
-
-        var cardId = "preview_" + i;
-
-        card.innerHTML =
-            '<div class="file-header" onclick="togglePreview(\'' + cardId + '\')">' +
-                '<div class="file-info">' +
-                    '<span class="badge ' + badgeType + '">' + ext.toUpperCase() + '</span>' +
-                    '<b>' + escapeHtml(res.filename) + '</b>' +
-                    '<span class="badge ' + statusBadge + '">' + statusText + '</span>' +
-                '</div>' +
-                '<div class="row-count">' + (res.total_rows || 0).toLocaleString() + ' rows ▼</div>' +
-            '</div>' +
-            '<div class="preview" id="' + cardId + '">' + escapeHtml(previewLines) + '</div>';
-
-        fileList.appendChild(card);
+        renderFileCard(results[i], i);
     }
 }
 
-function togglePreview(id) {
-    var el = document.getElementById(id);
+function renderFileCard(res, idx) {
+    var card = document.createElement("div");
+    card.className = "file-card";
+
+    var ext = res.filename.split(".").pop().toLowerCase();
+    var extClass = ext === "pdf" ? "b-pdf" : ext === "xls" ? "b-xls" : "b-xlsx";
+    var statusClass = res.success ? "b-ok" : "b-fail";
+    var statusText  = res.success ? "OK" : "FAIL";
+    var rowText = (res.total_rows || 0).toLocaleString() + " rows";
+    var previewId = "pv_" + idx;
+    var arrowId   = "ar_" + idx;
+
+    var header = document.createElement("div");
+    header.className = "file-header";
+    header.setAttribute("onclick", "toggleCard('" + previewId + "','" + arrowId + "')");
+    header.innerHTML =
+        '<div class="file-info">' +
+            '<span class="badge ' + extClass + '">' + ext.toUpperCase() + '</span>' +
+            '<b>' + esc(res.filename) + '</b>' +
+            '<span class="badge ' + statusClass + '">' + statusText + '</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:10px">' +
+            '<span class="row-count">' + rowText + '</span>' +
+            '<span class="arrow" id="' + arrowId + '">▼</span>' +
+        '</div>';
+
+    var previewArea = document.createElement("div");
+    previewArea.className = "preview-area";
+    previewArea.id = previewId;
+
+    if (!res.success) {
+        previewArea.innerHTML = '<div class="error-preview">❌ ' + esc(res.error_message || "Unknown error") + '</div>';
+    } else if (res.data_type === "table") {
+        previewArea.innerHTML = buildTable(res.data_rows, res.data_cols);
+    } else if (res.data_type === "text") {
+        previewArea.innerHTML = buildText(res.data_lines);
+    }
+
+    card.appendChild(header);
+    card.appendChild(previewArea);
+    fileList.appendChild(card);
+}
+
+function buildTable(rows, numCols) {
+    var html = '<table class="data-table"><thead><tr>';
+    html += '<th class="row-num">#</th>';
+    for (var c = 0; c < numCols; c++) {
+        html += '<th>Col ' + String.fromCharCode(65 + (c % 26)) + (c >= 26 ? String.fromCharCode(65 + Math.floor(c/26) - 1) : '') + '</th>';
+    }
+    html += '</tr></thead><tbody>';
+
+    for (var r = 0; r < rows.length; r++) {
+        html += '<tr>';
+        html += '<td class="row-num">' + (r + 1) + '</td>';
+        for (var c = 0; c < numCols; c++) {
+            var val = c < rows[r].length ? rows[r][c] : "";
+            if (val === "" || val === "nan" || val === "None") {
+                html += '<td class="cell-empty">—</td>';
+            } else {
+                html += '<td>' + esc(val) + '</td>';
+            }
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function buildText(lines) {
+    var html = '<div class="text-preview">';
+    for (var i = 0; i < lines.length; i++) {
+        html += '<span class="line-num">' + (i + 1) + '</span>' + esc(lines[i]) + '\n';
+    }
+    html += '</div>';
+    return html;
+}
+
+function toggleCard(previewId, arrowId) {
+    var el = document.getElementById(previewId);
+    var ar = document.getElementById(arrowId);
     if (el.style.display === "block") {
         el.style.display = "none";
+        ar.classList.remove("open");
     } else {
         el.style.display = "block";
+        ar.classList.add("open");
     }
 }
 
-function escapeHtml(text) {
+function esc(text) {
     var div = document.createElement("div");
-    div.textContent = text;
+    div.textContent = String(text);
     return div.innerHTML;
 }
 </script>
@@ -363,34 +529,42 @@ def upload():
     results = []
 
     for f in files:
-        session_id = str(uuid.uuid4())[:8]
-        safe_name = session_id + "_" + secure_filename(f.filename)
-        filepath = UPLOAD_FOLDER / safe_name
+        sid = str(uuid.uuid4())[:8]
+        safe = sid + "_" + secure_filename(f.filename)
+        filepath = UPLOAD_FOLDER / safe
         f.save(filepath)
 
         ext = filepath.suffix.lower()
-        content = []
-        success = True
+        result_entry = {
+            "filename": f.filename,
+            "success": False,
+            "total_rows": 0,
+            "data_type": "error",
+            "error_message": "",
+        }
 
         if ext in [".xlsx", ".xls"]:
-            content = read_excel(filepath)
+            data = read_excel(filepath)
         elif ext == ".pdf":
-            content = read_pdf(filepath)
+            data = read_pdf(filepath)
         else:
-            content = "Unsupported format"
-            success = False
+            data = {"type": "error", "message": "Unsupported file type: " + ext}
 
-        if isinstance(content, str):
-            success = False
+        if data["type"] == "error":
+            result_entry["error_message"] = data.get("message", "Unknown error")
+        elif data["type"] == "table":
+            result_entry["success"]    = True
+            result_entry["data_type"]  = "table"
+            result_entry["data_rows"]  = data["rows"]
+            result_entry["data_cols"]  = data["cols"]
+            result_entry["total_rows"] = len(data["rows"])
+        elif data["type"] == "text":
+            result_entry["success"]    = True
+            result_entry["data_type"]  = "text"
+            result_entry["data_lines"] = data["lines"]
+            result_entry["total_rows"] = len(data["lines"])
 
-        total_rows = len(content) if isinstance(content, list) else 0
-
-        results.append({
-            "filename": f.filename,
-            "success": success,
-            "total_rows": total_rows,
-            "data": content,
-        })
+        results.append(result_entry)
 
         if filepath.exists():
             os.remove(filepath)
