@@ -1,348 +1,194 @@
-# app.py
-"""
-Tenant Sales Aggregator — Handles pivot-style Excel files where:
-  - Column headers are month-year codes like: Dec-25, Jan-26, Feb-26
-  - Row labels are tenant names
-  - Cell values are sales figures
-Also still handles the traditional Date/Sales column format.
-"""
-
 import os
-import re
 import uuid
-import warnings
-import calendar as cal
-from datetime import date, timedelta, datetime
-from pathlib import Path
-
-import numpy as np
 import pandas as pd
-import holidays
-from flask import Flask, request, jsonify, send_file, render_template_string
+import pdfplumber
+from pathlib import Path
+from flask import Flask, request, jsonify, render_template_string
 from werkzeug.utils import secure_filename
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.chart import LineChart, Reference
-from openpyxl.chart.series import SeriesLabel
-
-warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CONFIG
-# ══════════════════════════════════════════════════════════════════
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
-
-UPLOAD_FOLDER = Path("uploads")
+UPLOAD_FOLDER = Path("temp_uploads")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
-SESSION_STORE: dict[str, dict] = {}
-ALLOWED_EXT = {".xlsx", ".xls"}
 
-def allowed_file(fn: str) -> bool:
-    return Path(fn).suffix.lower() in ALLOWED_EXT
+# ─── CORE LOGIC: FILE READERS ────────────────────────────────
 
-
-# ══════════════════════════════════════════════════════════════════
-#  SECTION 1 — Indonesian Calendar
-# ══════════════════════════════════════════════════════════════════
-
-def get_id_holidays(year: int) -> set:
-    return set(holidays.Indonesia(years=year).keys())
-
-def classify_day(d: date, hols: set) -> str:
-    if d.weekday() >= 5:
-        return "Weekend"
-    if d in hols:
-        return "Weekend"
-    return "Weekday"
-
-def build_timeline(year: int, month: int) -> pd.DataFrame:
-    hols = get_id_holidays(year)
-    first = date(year, month, 1)
-    n = cal.monthrange(year, month)[1]
-    rows = []
-    for i in range(n):
-        d = first + timedelta(days=i)
-        rows.append({
-            "Date": d,
-            "DayName": d.strftime("%A"),
-            "DayType": classify_day(d, hols),
-        })
-    return pd.DataFrame(rows)
-
-
-# ══════════════════════════════════════════════════════════════════
-#  SECTION 2 — Month-Year Header Parser
-# ══════════════════════════════════════════════════════════════════
-
-# All formats people use for month-year headers
-MONTH_MAP = {
-    "jan": 1, "january": 1, "januari": 1,
-    "feb": 2, "february": 2, "februari": 2,
-    "mar": 3, "march": 3, "maret": 3,
-    "apr": 4, "april": 4,
-    "may": 5, "mei": 5,
-    "jun": 6, "june": 6, "juni": 6,
-    "jul": 7, "july": 7, "juli": 7,
-    "aug": 8, "august": 8, "agustus": 8, "agu": 8, "ags": 8,
-    "sep": 9, "september": 9, "sept": 9,
-    "oct": 10, "october": 10, "okt": 10, "oktober": 10,
-    "nov": 11, "november": 11, "nop": 11,
-    "dec": 12, "december": 12, "des": 12, "desember": 12,
-}
-
-
-def parse_month_year(text: str) -> tuple[int, int] | None:
-    """
-    Parse strings like: Dec-25, Jan-26, Feb 2026, 2025-12,
-    December 2025, Des-25, etc.
-    Returns (year_4digit, month_number) or None.
-    """
-    if text is None:
-        return None
-    s = str(text).strip().lower()
-    if not s:
-        return None
-
-    # ── Pattern 1: "Mon-YY" or "Mon YY" or "Mon-YYYY" ────────────────
-    m1 = re.match(r"^([a-z]+)[.\-_/\s]+(\d{2,4})$", s)
-    if m1:
-        month_str, year_str = m1.group(1), m1.group(2)
-        month_num = MONTH_MAP.get(month_str)
-        if month_num:
-            yr = int(year_str)
-            if yr < 100:
-                yr += 2000
-            return (yr, month_num)
-
-    # ── Pattern 2: "YYYY-MM" or "YY-Mon" ─────────────────────────────
-    m2 = re.match(r"^(\d{2,4})[.\-_/\s]+([a-z]+|\d{1,2})$", s)
-    if m2:
-        year_str, month_str = m2.group(1), m2.group(2)
-        yr = int(year_str)
-        if yr < 100:
-            yr += 2000
-        # month might be a number or name
-        if month_str.isdigit():
-            mn = int(month_str)
-            if 1 <= mn <= 12:
-                return (yr, mn)
-        else:
-            mn = MONTH_MAP.get(month_str)
-            if mn:
-                return (yr, mn)
-
-    # ── Pattern 3: "December 2025" or "2025 December" ─────────────────
-    m3 = re.match(r"^([a-z]+)\s+(\d{4})$", s)
-    if m3:
-        mn = MONTH_MAP.get(m3.group(1))
-        if mn:
-            return (int(m3.group(2)), mn)
-
-    m4 = re.match(r"^(\d{4})\s+([a-z]+)$", s)
-    if m4:
-        mn = MONTH_MAP.get(m4.group(2))
-        if mn:
-            return (int(m4.group(1)), mn)
-
-    return None
-
-
-def is_month_header(val) -> bool:
-    """Quick check if a value looks like a month-year header."""
-    return parse_month_year(str(val)) is not None
-
-
-# ══════════════════════════════════════════════════════════════════
-#  SECTION 3 — Pivot Format Scanner
-# ══════════════════════════════════════════════════════════════════
-
-class ScanResult:
-    def __init__(self):
-        self.success      = False
-        self.format       = ""      # "pivot" or "columnar"
-        self.tenants_data = {}      # {tenant_name: {(year,month): sales_value}}
-        self.header_row   = -1
-        self.label_col    = -1
-        self.warnings     = []
-        self.error        = ""
-
-
-def _clean_number(val) -> float:
-    """Convert messy number strings to float."""
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        if pd.isna(val):
-            return 0.0
-        return float(val)
-    s = str(val).strip()
-    if not s or s.lower() in ("nan", "-", "n/a", ""):
-        return 0.0
-    # Remove currency symbols and thousand separators
-    cleaned = re.sub(r"[Rp,\s$€£]", "", s)
-    # Handle Indonesian dot-as-thousands (e.g., 5.000.000)
-    # If there are multiple dots, they're thousands separators
-    if cleaned.count(".") > 1:
-        cleaned = cleaned.replace(".", "")
-    elif cleaned.count(".") == 1:
-        # Could be decimal or thousands — if 3 digits after dot, it's thousands
-        parts = cleaned.split(".")
-        if len(parts[1]) == 3:
-            cleaned = cleaned.replace(".", "")
+def read_excel(path):
+    """Reads Excel and returns a list of rows for preview."""
     try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+        # Check if it's .xls or .xlsx
+        engine = "xlrd" if path.suffix == ".xls" else "openpyxl"
+        df = pd.read_excel(path, header=None, engine=engine).fillna("")
+        return df.values.tolist()
+    except Exception as e:
+        return f"Excel Error: {str(e)}"
 
-
-def smart_scan(filepath: Path) -> ScanResult:
-    """
-    Scan an Excel file to detect its format:
-
-    FORMAT 1 — "Pivot" (your format):
-        Row headers = tenant names
-        Column headers = month-year codes (Dec-25, Jan-26, etc.)
-        Cell values = monthly sales figures
-
-    FORMAT 2 — "Columnar" (traditional):
-        Column: Date | Sales
-        Row: one row per day per tenant
-    """
-    result = ScanResult()
-    ext    = filepath.suffix.lower()
-    engine = "openpyxl" if ext == ".xlsx" else "xlrd"
-
-    # ── Read raw (no header assumption) ───────────────────────────────
+def read_pdf(path):
+    """Reads PDF and returns text lines for preview."""
     try:
-        raw = pd.read_excel(filepath, header=None, dtype=str, engine=engine)
-    except Exception as exc:
-        result.error = f"Cannot open file: {exc}"
-        return result
+        lines = []
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    lines.extend([l.strip() for l in text.split('\n') if l.strip()])
+        return lines if lines else "PDF Error: No text found."
+    except Exception as e:
+        return f"PDF Error: {str(e)}"
 
-    if raw.empty:
-        result.error = "File is empty."
-        return result
+# ─── HTML/JS UI (Drag & Drop Folder) ─────────────────────────
 
-    # ── Scan every row to find the one with month-year headers ────────
-    max_scan = min(50, len(raw))
-    best_row = -1
-    best_month_count = 0
-    best_month_cols = {}      # col_index → (year, month)
+HTML_UI = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phase 1: Folder Reader</title>
+    <style>
+        body { font-family: sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .drop-zone {
+            border: 3px dashed #3b82f6; border-radius: 20px;
+            padding: 60px; text-align: center; cursor: pointer;
+            background: rgba(59, 130, 246, 0.05); transition: 0.3s;
+        }
+        .drop-zone.hover { background: rgba(59, 130, 246, 0.2); border-color: #60a5fa; }
+        .file-list { margin-top: 30px; }
+        .file-card { 
+            background: #1e293b; padding: 15px; border-radius: 10px; 
+            margin-bottom: 10px; border: 1px solid #334155; 
+        }
+        .status { font-weight: bold; font-size: 0.8em; margin-bottom: 5px; }
+        .preview { font-family: monospace; font-size: 0.75em; background: #000; 
+                   padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; color: #10b981; }
+        .loader { display: none; color: #3b82f6; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📂 Phase 1: Folder Reader</h1>
+        <p>Drag and drop a <b>folder</b> containing Tenant Excel or PDF files.</p>
+        
+        <div class="drop-zone" id="dropZone">
+            <div style="font-size: 3rem;">📥</div>
+            <p>Drop Folder Here</p>
+        </div>
+        <div id="loader" class="loader">Processing files...</div>
 
-    for row_idx in range(max_scan):
-        row_vals = raw.iloc[row_idx].tolist()
-        month_cols = {}
-        for col_idx, val in enumerate(row_vals):
-            parsed = parse_month_year(str(val) if val is not None else "")
-            if parsed:
-                month_cols[col_idx] = parsed
+        <div class="file-list" id="fileList"></div>
+    </div>
 
-        if len(month_cols) > best_month_count:
-            best_month_count = len(month_cols)
-            best_row = row_idx
-            best_month_cols = month_cols
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileList = document.getElementById('fileList');
+        const loader = document.getElementById('loader');
 
-    # ── Decide format ─────────────────────────────────────────────────
-    if best_month_count >= 2:
-        # PIVOT FORMAT detected
-        result.format     = "pivot"
-        result.header_row = best_row
-        result = _parse_pivot(raw, result, best_row, best_month_cols)
-    else:
-        # Try columnar format as fallback
-        result.format = "columnar"
-        result = _parse_columnar(filepath, raw, result, engine)
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('hover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
 
-    return result
+        dropZone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('hover');
+            fileList.innerHTML = '';
+            loader.style.display = 'block';
 
+            const items = e.dataTransfer.items;
+            const formData = new FormData();
 
-def _parse_pivot(
-    raw: pd.DataFrame,
-    result: ScanResult,
-    header_row: int,
-    month_cols: dict,       # {col_index: (year, month)}
-) -> ScanResult:
-    """
-    Parse the pivot format where:
-    - header_row contains month-year codes
-    - Rows below contain: [tenant_name, ..., sales, sales, sales, ...]
-    """
-    result.header_row = header_row
+            // Recursively get all files from folders
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i].webkitGetAsEntry();
+                if (item) {
+                    await traverseFileTree(item, formData);
+                }
+            }
 
-    # Figure out which column has the tenant labels
-    # It's typically the first non-month column, or column 0
-    header_vals = raw.iloc[header_row].tolist()
-    month_col_indices = set(month_cols.keys())
+            // Send to Flask
+            const response = await fetch('/upload', { method: 'POST', body: formData });
+            const result = await response.json();
+            
+            loader.style.display = 'none';
+            renderResults(result);
+        });
 
-    # Find the label column (first column that is NOT a month header)
-    label_col = None
-    for c_idx in range(len(header_vals)):
-        if c_idx not in month_col_indices:
-            val = str(header_vals[c_idx]).strip().lower() if header_vals[c_idx] is not None else ""
-            # Skip if it's empty
-            if val and val not in ("nan", ""):
-                label_col = c_idx
-                break
+        async function traverseFileTree(item, formData, path = "") {
+            if (item.isFile) {
+                const file = await new Promise(resolve => item.file(resolve));
+                // Only accept Excel and PDF
+                if (file.name.match(/\.(xlsx|xls|pdf)$/i)) {
+                    formData.append('files', file, path + file.name);
+                }
+            } else if (item.isDirectory) {
+                const dirReader = item.createReader();
+                const entries = await new Promise(resolve => dirReader.readEntries(resolve));
+                for (let i = 0; i < entries.length; i++) {
+                    await traverseFileTree(entries[i], formData, path + item.name + "/");
+                }
+            }
+        }
 
-    # If no explicit label column found, use column 0
-    if label_col is None:
-        label_col = 0
-        # But if column 0 IS a month column, try to find another
-        if label_col in month_col_indices:
-            for c in range(len(header_vals)):
-                if c not in month_col_indices:
-                    label_col = c
-                    break
+        function renderResults(data) {
+            if (data.error) { alert(data.error); return; }
+            data.results.forEach(res => {
+                const card = document.createElement('div');
+                card.className = 'file-card';
+                card.innerHTML = `
+                    <div class="status" style="color: ${res.success ? '#10b981' : '#ef4444'}">
+                        ${res.success ? '✅ READ SUCCESS' : '❌ READ FAILED'}
+                    </div>
+                    <div style="margin-bottom: 8px;"><b>📄 ${res.filename}</b></div>
+                    <div class="preview">${JSON.stringify(res.data, null, 2)}</div>
+                `;
+                fileList.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html>
+"""
 
-    result.label_col = label_col
+# ─── FLASK ROUTES ───────────────────────────────────────────
 
-    # ── Extract tenant data from rows below the header ────────────────
-    tenants_data = {}
-    data_start = header_row + 1
+@app.route('/')
+def index():
+    return render_template_string(HTML_UI)
 
-    for row_idx in range(data_start, len(raw)):
-        row_vals = raw.iloc[row_idx].tolist()
-
-        # Get tenant name from the label column
-        tenant_name = str(row_vals[label_col]).strip() if label_col < len(row_vals) else ""
-
-        # Skip empty rows, total rows, header-like rows
-        if not tenant_name or tenant_name.lower() in (
-            "", "nan", "total", "grand total", "jumlah", "subtotal",
-            "sub total", "sum", "rata-rata", "average", "rata rata",
-        ):
-            continue
-
-        # Skip if the tenant name looks like a number (probably a data value in wrong col)
-        try:
-            float(tenant_name.replace(",", "").replace(".", ""))
-            continue   # it's a number, not a tenant name
-        except ValueError:
-            pass
-
-        # Extract monthly sales for this tenant
-        monthly_sales = {}
-        for col_idx, (yr, mn) in month_cols.items():
-            if col_idx < len(row_vals):
-                val = _clean_number(row_vals[col_idx])
-                monthly_sales[(yr, mn)] = val
-
-        if monthly_sales:
-            tenants_data[tenant_name] = monthly_sales
-
-    if not tenants_data:
-        result.error = "Found month-year headers but no tenant data rows."
-        return result
-
-    result.tenants_data = tenants_data
-    result.success = True
-
-    # Report what was found
-    months_found = sorted(set(
-        ym for td in tenants_data.values() for ym in td.keys()
-    ))
+@app.route('/upload', methods=['POST'])
+def upload():
+    if 'files' not in request.files:
+        return jsonify({"error": "No files found"}), 400
     
+    files = request.files.getlist('files')
+    results = []
+    
+    # Save and Read each file
+    for f in files:
+        session_id = str(uuid.uuid4())[:8]
+        safe_name = f"{session_id}_{secure_filename(f.filename)}"
+        filepath = UPLOAD_FOLDER / safe_name
+        f.save(filepath)
+        
+        ext = filepath.suffix.lower()
+        content = []
+        success = True
+        
+        if ext in ['.xlsx', '.xls']:
+            content = read_excel(filepath)
+        elif ext == '.pdf':
+            content = read_pdf(filepath)
+        else:
+            content = "Unsupported format"
+            success = False
+            
+        results.append({
+            "filename": f.filename,
+            "success": success,
+            "data": content[:10] # Return first 10 rows/lines for preview
+        })
+        
+        # Cleanup
+        if filepath.exists():
+            os.remove(filepath)
+
+    return jsonify({"results": results})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
