@@ -11,6 +11,7 @@ from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
+from collections import defaultdict
 
 
 # ── Slide dimensions (16:9 widescreen) ────────────────────────
@@ -326,7 +327,104 @@ def _slide_with_chart(
 
     return slide
 
+def _slide_events(prs, events_data: dict, target_key: str, month_label: str):
+    """Slide: Event Calendar for the month."""
+    layout = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(layout)
+    _add_rect(slide, 0, 0, SLIDE_W, SLIDE_H, C_WHITE)
+    _header_bar(slide, "Event Calendar", month_label)
 
+    # Filter to target month
+    target_events = [e for e in events_data.get("events_flat", [])
+                     if e["date"].startswith(target_key)]
+
+    if not target_events:
+        _add_textbox(
+            slide, "No events found for this period.",
+            left=Inches(0.4), top=Inches(1.5),
+            width=Inches(10), height=Inches(0.5),
+            font_size=14, color=C_MUTED,
+        )
+        return
+
+    # Group by date
+    events_by_date = defaultdict(list)
+    for e in target_events:
+        try:
+            dt = datetime.strptime(e["date"], "%Y-%m-%d")
+            label = dt.strftime("%a, %d %b")
+        except ValueError:
+            label = e["date"]
+        events_by_date[label].append(e)
+
+    # Build a scrollable-looking list
+    # Left column: date cards
+    date_list = sorted(events_by_date.keys())
+
+    # Title showing event count
+    _add_textbox(
+        slide,
+        f"{len(target_events)} events across {len(date_list)} day(s)",
+        left=Inches(0.4), top=Inches(1.3),
+        width=Inches(10), height=Inches(0.35),
+        font_size=11, color=C_MUTED, italic=True,
+    )
+
+    # Simplified layout: 2-column grid of event cards
+    card_w = Inches(5.9)
+    card_h = Inches(1.6)
+    gap_x = Inches(0.35)
+    gap_y = Inches(0.2)
+
+    cols = 2
+    start_x = Inches(0.3)
+    start_y = Inches(1.75)
+
+    for i, (date_label, evts) in enumerate(events_by_date.items()):
+        col = i % cols
+        row_idx = i // cols
+
+        left = start_x + col * (card_w + gap_x)
+        top = start_y + row_idx * (card_h + gap_y)
+
+        if top + card_h > Inches(7.2):
+            break  # Don't overflow the slide
+
+        # Card background
+        _add_rect(slide, left, top, card_w, card_h, RGBColor(0xF4, 0xF6, 0xF9))
+
+        # Date header
+        _add_textbox(
+            slide, date_label,
+            left=left + Inches(0.1), top=top + Inches(0.05),
+            width=card_w - Inches(0.2), height=Inches(0.3),
+            font_size=9, bold=True, color=C_NAVY,
+        )
+
+        # Event list
+        event_text = "\n".join(
+            f"• {e['event_name'][:80]}  ({e['location']})"
+            for e in evts[:5]
+        )
+        if len(evts) > 5:
+            event_text += f"\n... +{len(evts) - 5} more"
+
+        _add_textbox(
+            slide, event_text,
+            left=left + Inches(0.1), top=top + Inches(0.38),
+            width=card_w - Inches(0.2), height=card_h - Inches(0.5),
+            font_size=8, color=C_TEXT, wrap=True,
+        )
+
+    # Bottom strip
+    _add_rect(slide, 0, SLIDE_H - Inches(0.35), SLIDE_W, Inches(0.35), C_LIGHT)
+    _add_textbox(
+        slide, f"Event count: {len(target_events)}",
+        left=Inches(0.3), top=SLIDE_H - Inches(0.33),
+        width=Inches(10), height=Inches(0.3),
+        font_size=8, color=C_MUTED,
+    )
+    
 def _slide_recommendations(prs, recommendations: list[str], month_label: str):
     """Last slide — Recommendations."""
     layout = prs.slide_layouts[6]
@@ -400,6 +498,7 @@ def build_pptx(
     llm_text   : dict,
     charts     : dict,        # {"monthly_sales": BytesIO, "top_tenants": BytesIO, ...}
     month_label: str,
+    events_data=None,
 ) -> io.BytesIO:
     """
     Assemble the full presentation.
@@ -478,7 +577,11 @@ def build_pptx(
             chart_h     = Inches(5.5),
         )
 
-    # ── Slide 7: Recommendations ─────────────────────────────
+    # ── Slide 7: Events Calendar ──────────────────────────────
+    if events_data and events_data.get("events_flat"):
+        _slide_events(prs, events_data, None, month_label)
+
+    # ── Slide 8: Recommendations ─────────────────────────────
     _slide_recommendations(
         prs,
         recommendations = llm_text.get("recommendations", []),
