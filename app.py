@@ -7,8 +7,11 @@ from datetime import datetime, date
 import pandas as pd
 import pdfplumber
 from pathlib import Path
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 from werkzeug.utils import secure_filename
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 UPLOAD_FOLDER = Path("temp_uploads")
@@ -1039,14 +1042,19 @@ HTML_UI = r"""
 
     <!-- MASTER REPORT -->
     <div class="master" id="masterSection">
-        <div class="config-card">
-            <div class="config-title">📊 Master Report — Unified Tenant Sales</div>
-            <div class="master-warn" id="masterWarn"></div>
-            <div class="master-table-wrap">
-                <table class="master-table" id="masterTable"></table>
-            </div>
+    <div class="config-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+            <div class="config-title" style="margin-bottom:0">📊 Master Report — Unified Tenant Sales</div>
+            <button class="browse-btn btn-folder" id="exportBtn" onclick="exportExcel()" style="margin:0">
+                ⬇️ Export to Excel
+            </button>
+        </div>
+        <div class="master-warn" id="masterWarn"></div>
+        <div class="master-table-wrap" style="margin-top:12px">
+            <table class="master-table" id="masterTable"></table>
         </div>
     </div>
+</div>
 
     <div class="file-list" id="fileList"></div>
 </div>
@@ -1210,6 +1218,59 @@ function renderAll(data) {
     for (var i = 0; i < results.length; i++) renderCard(results[i], i);
 }
 
+async function exportExcel() {
+    var data = window._masterExportData;
+    if (!data || Object.keys(data).length === 0) {
+        alert("No data to export. Upload and process files first.");
+        return;
+    }
+
+    var btn = document.getElementById("exportBtn");
+    btn.textContent = "⏳ Generating...";
+    btn.disabled = true;
+
+    var payload = {
+        month: parseInt(document.getElementById("monthSel").value),
+        year: parseInt(document.getElementById("yearIn").value),
+        master: data,
+    };
+
+    try {
+        var resp = await fetch("/export", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+            var err = await resp.json();
+            alert("Export failed: " + (err.error || "Unknown error"));
+            return;
+        }
+
+        var blob = await resp.blob();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+
+        var months = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        var m = parseInt(document.getElementById("monthSel").value);
+        var y = document.getElementById("yearIn").value;
+        a.download = "Tenant_Report_" + months[m] + "_" + y + ".xlsx";
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } catch (err) {
+        alert("Export error: " + err.message);
+    } finally {
+        btn.textContent = "⬇️ Export to Excel";
+        btn.disabled = false;
+    }
+}
+
 // ─── MASTER REPORT ─────────────────────────────────────────
 
 function buildMaster(results) {
@@ -1303,6 +1364,9 @@ function buildMaster(results) {
     }
 
     document.getElementById("masterSection").style.display = "block";
+
+    // Store data for export
+    window._masterExportData = tenantMap;
 }
 
 function monthShort(m) {
@@ -1445,6 +1509,292 @@ function fmtNum(v) { return Number(v).toLocaleString("id-ID"); }
 </html>
 """
 
+# ══════════════════════════════════════════════════════════════
+#  PHASE 3 — EXCEL EXPORT
+# ══════════════════════════════════════════════════════════════
+
+REPORTS_FOLDER = Path("generated_reports")
+REPORTS_FOLDER.mkdir(exist_ok=True)
+
+# Style constants
+THIN_BORDER = Border(
+    left=Side(style="thin", color="BDBDBD"),
+    right=Side(style="thin", color="BDBDBD"),
+    top=Side(style="thin", color="BDBDBD"),
+    bottom=Side(style="thin", color="BDBDBD"),
+)
+
+HEADER_FILL = PatternFill("solid", fgColor="1A3A5C")
+HEADER_FONT = Font(color="FFFFFF", bold=True, size=11, name="Calibri")
+HEADER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+TITLE_FILL = PatternFill("solid", fgColor="2874A6")
+TITLE_FONT = Font(color="FFFFFF", bold=True, size=14, name="Calibri")
+
+TARGET_FILL = PatternFill("solid", fgColor="D6EAF8")
+TARGET_HEADER_FILL = PatternFill("solid", fgColor="2E86C1")
+
+TOTAL_FILL = PatternFill("solid", fgColor="EBF5FB")
+TOTAL_FONT = Font(color="1B4F72", bold=True, size=11, name="Calibri")
+
+GRAND_FILL = PatternFill("solid", fgColor="1B4F72")
+GRAND_FONT = Font(color="FFFFFF", bold=True, size=11, name="Calibri")
+
+DATA_FONT = Font(color="2C3E50", size=10, name="Calibri")
+DATA_FONT_BOLD = Font(color="2C3E50", size=10, name="Calibri", bold=True)
+
+ALT_FILL_1 = PatternFill("solid", fgColor="FFFFFF")
+ALT_FILL_2 = PatternFill("solid", fgColor="F7F9FC")
+
+WEEKEND_FILL = PatternFill("solid", fgColor="D5F5E3")
+WEEKEND_FONT = Font(color="1D6A39", size=10, name="Calibri")
+
+NO_DATA_FONT = Font(color="BDC3C7", size=10, name="Calibri", italic=True)
+
+
+def _style_cell(cell, fill=None, font=None, align=None, border=True, num_fmt=None):
+    if fill:
+        cell.fill = fill
+    if font:
+        cell.font = font
+    if align:
+        cell.alignment = align
+    if border:
+        cell.border = THIN_BORDER
+    if num_fmt:
+        cell.number_format = num_fmt
+
+
+def _set_col_width(ws, col, width):
+    ws.column_dimensions[get_column_letter(col)].width = width
+
+
+def build_export_workbook(master_data, target_year, target_month):
+    """
+    Build a multi-tab Excel workbook from parsed master data.
+
+    master_data = {
+        "tenant_name": {
+            "monthly": {"2026-05": 123456, ...},
+            "daily": [{"date": "2026-05-01", "sales": 12345}, ...],
+            "files": ["file1.xlsx", ...]
+        }
+    }
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    target_key = f"{target_year}-{target_month:02d}"
+    month_label = f"{cal.month_name[target_month]} {target_year}"
+
+    # Collect all months across all tenants
+    all_months = sorted(set(
+        k for t in master_data.values() for k in t.get("monthly", {})
+    ))
+
+    tenant_names = sorted(
+        master_data.keys(),
+        key=lambda t: master_data[t].get("monthly", {}).get(target_key, 0),
+        reverse=True,
+    )
+
+    # ═══════════════════════════════════════════════════════════
+    # Sheet 1: Monthly Summary
+    # ═══════════════════════════════════════════════════════════
+    ws = wb.create_sheet("Monthly Summary")
+    ws.sheet_view.showGridLines = False
+
+    # Title row
+    total_cols = 1 + len(all_months) + 1
+    end_col = get_column_letter(total_cols)
+    ws.merge_cells(f"A1:{end_col}1")
+    title_cell = ws["A1"]
+    title_cell.value = f"Tenant Sales Summary — Target: {month_label}"
+    _style_cell(title_cell, fill=TITLE_FILL, font=TITLE_FONT,
+                align=Alignment(horizontal="center", vertical="center"))
+    ws.row_dimensions[1].height = 36
+
+    # Header row
+    ws.cell(row=2, column=1, value="Tenant")
+    _style_cell(ws.cell(row=2, column=1), fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+    _set_col_width(ws, 1, 30)
+
+    for i, mk in enumerate(all_months):
+        parts = mk.split("-")
+        label = f"{cal.month_abbr[int(parts[1])]}-{parts[0][2:]}"
+        col = 2 + i
+        cell = ws.cell(row=2, column=col, value=label)
+
+        if mk == target_key:
+            _style_cell(cell, fill=TARGET_HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+        else:
+            _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+
+        _set_col_width(ws, col, 16)
+
+    total_col = 2 + len(all_months)
+    cell = ws.cell(row=2, column=total_col, value="Total")
+    _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+    _set_col_width(ws, total_col, 18)
+
+    # Data rows
+    col_totals = {mk: 0 for mk in all_months}
+    grand_total = 0
+
+    for i, tenant in enumerate(tenant_names):
+        row = 3 + i
+        tm = master_data[tenant]
+        monthly = tm.get("monthly", {})
+        alt_fill = ALT_FILL_1 if i % 2 == 0 else ALT_FILL_2
+
+        # Tenant name
+        cell = ws.cell(row=row, column=1, value=tenant)
+        _style_cell(cell, fill=alt_fill, font=DATA_FONT_BOLD,
+                     align=Alignment(horizontal="left", vertical="center"))
+
+        row_total = 0
+        for j, mk in enumerate(all_months):
+            col = 2 + j
+            v = monthly.get(mk)
+
+            if v is not None:
+                cell = ws.cell(row=row, column=col, value=v)
+                fill = TARGET_FILL if mk == target_key else alt_fill
+                _style_cell(cell, fill=fill, font=DATA_FONT,
+                             align=Alignment(horizontal="right"),
+                             num_fmt="#,##0")
+                row_total += v
+                col_totals[mk] = col_totals.get(mk, 0) + v
+            else:
+                cell = ws.cell(row=row, column=col, value="—")
+                _style_cell(cell, fill=alt_fill, font=NO_DATA_FONT,
+                             align=Alignment(horizontal="center"))
+
+        # Row total
+        cell = ws.cell(row=row, column=total_col, value=row_total)
+        _style_cell(cell, fill=TOTAL_FILL, font=TOTAL_FONT,
+                     align=Alignment(horizontal="right"), num_fmt="#,##0")
+        grand_total += row_total
+
+    # Grand total row
+    grand_row = 3 + len(tenant_names)
+    cell = ws.cell(row=grand_row, column=1, value="GRAND TOTAL")
+    _style_cell(cell, fill=GRAND_FILL, font=GRAND_FONT,
+                 align=Alignment(horizontal="left", vertical="center"))
+
+    for j, mk in enumerate(all_months):
+        col = 2 + j
+        cell = ws.cell(row=grand_row, column=col, value=col_totals.get(mk, 0))
+        _style_cell(cell, fill=GRAND_FILL, font=GRAND_FONT,
+                     align=Alignment(horizontal="right"), num_fmt="#,##0")
+
+    cell = ws.cell(row=grand_row, column=total_col, value=grand_total)
+    _style_cell(cell, fill=GRAND_FILL, font=GRAND_FONT,
+                 align=Alignment(horizontal="right"), num_fmt="#,##0")
+
+    ws.freeze_panes = "B3"
+
+    # ═══════════════════════════════════════════════════════════
+    # Sheet 2+: Individual Tenant Sheets (daily data)
+    # ═══════════════════════════════════════════════════════════
+    for tenant in tenant_names:
+        tm = master_data[tenant]
+        daily = tm.get("daily", [])
+
+        if not daily:
+            continue
+
+        # Filter to target month only
+        target_daily = [d for d in daily if d["date"].startswith(target_key)]
+        if not target_daily:
+            continue
+
+        safe_name = re.sub(r"[^\w\s\-]", "", tenant)[:28]
+        ws2 = wb.create_sheet(safe_name)
+        ws2.sheet_view.showGridLines = False
+
+        # Title
+        ws2.merge_cells("A1:E1")
+        title = ws2["A1"]
+        title.value = f"{tenant} — Daily Sales ({month_label})"
+        _style_cell(title, fill=TITLE_FILL, font=TITLE_FONT,
+                      align=Alignment(horizontal="center", vertical="center"))
+        ws2.row_dimensions[1].height = 32
+
+        # Headers
+        headers = ["Date", "Day", "Day Type", "Sales (IDR)", "Source File"]
+        for c, h in enumerate(headers, 1):
+            cell = ws2.cell(row=2, column=c, value=h)
+            _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+
+        _set_col_width(ws2, 1, 16)
+        _set_col_width(ws2, 2, 14)
+        _set_col_width(ws2, 3, 12)
+        _set_col_width(ws2, 4, 22)
+        _set_col_width(ws2, 5, 25)
+
+        # Daily rows
+        monthly_total = 0
+        source_files = ", ".join(tm.get("files", []))
+
+        for i, d in enumerate(target_daily):
+            row = 3 + i
+            try:
+                dt = datetime.strptime(d["date"], "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
+            day_name = dt.strftime("%A")
+            is_weekend = dt.weekday() >= 5
+
+            if is_weekend:
+                fill = WEEKEND_FILL
+                font = WEEKEND_FONT
+                day_type = "Weekend"
+            else:
+                fill = ALT_FILL_1 if i % 2 == 0 else ALT_FILL_2
+                font = DATA_FONT
+                day_type = "Weekday"
+
+            ws2.cell(row=row, column=1, value=dt)
+            _style_cell(ws2.cell(row=row, column=1), fill=fill, font=font,
+                         align=Alignment(horizontal="center"), num_fmt="DD-MMM-YYYY")
+
+            ws2.cell(row=row, column=2, value=day_name)
+            _style_cell(ws2.cell(row=row, column=2), fill=fill, font=font,
+                         align=Alignment(horizontal="center"))
+
+            ws2.cell(row=row, column=3, value=day_type)
+            _style_cell(ws2.cell(row=row, column=3), fill=fill, font=font,
+                         align=Alignment(horizontal="center"))
+
+            ws2.cell(row=row, column=4, value=d["sales"])
+            _style_cell(ws2.cell(row=row, column=4), fill=fill, font=font,
+                         align=Alignment(horizontal="right"), num_fmt="#,##0")
+
+            ws2.cell(row=row, column=5, value=source_files)
+            _style_cell(ws2.cell(row=row, column=5), fill=fill,
+                         font=Font(color="94A3B8", size=9, name="Calibri"),
+                         align=Alignment(horizontal="left"))
+
+            monthly_total += d["sales"]
+
+        # Total row
+        total_row = 3 + len(target_daily)
+        ws2.cell(row=total_row, column=3, value="TOTAL")
+        _style_cell(ws2.cell(row=total_row, column=3), fill=GRAND_FILL, font=GRAND_FONT,
+                      align=Alignment(horizontal="center"))
+
+        ws2.cell(row=total_row, column=4, value=monthly_total)
+        _style_cell(ws2.cell(row=total_row, column=4), fill=GRAND_FILL, font=GRAND_FONT,
+                      align=Alignment(horizontal="right"), num_fmt="#,##0")
+
+        for c in [1, 2, 5]:
+            _style_cell(ws2.cell(row=total_row, column=c), fill=GRAND_FILL, font=GRAND_FONT)
+
+        ws2.freeze_panes = "A3"
+
+    return wb
 
 # ══════════════════════════════════════════════════════════════
 #  ROUTES
@@ -1529,6 +1879,40 @@ def upload():
             os.remove(filepath)
 
     return jsonify({"results": results})
+
+@app.route("/export", methods=["POST"])
+def export():
+    """Build and download the Excel report from parsed data."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+
+        target_month = int(data.get("month", 1))
+        target_year = int(data.get("year", 2026))
+        master_data = data.get("master", {})
+
+        if not master_data:
+            return jsonify({"error": "No tenant data to export"}), 400
+
+        wb = build_export_workbook(master_data, target_year, target_month)
+
+        month_name = cal.month_abbr[target_month]
+        filename = f"Tenant_Report_{month_name}_{target_year}.xlsx"
+        filepath = REPORTS_FOLDER / filename
+
+        wb.save(filepath)
+
+        from flask import send_file
+        return send_file(
+            filepath,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    except Exception as e:
+        return jsonify({"error": "Export failed: " + str(e)}), 500
 
 
 if __name__ == "__main__":
