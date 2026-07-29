@@ -1531,6 +1531,7 @@ async function exportPptx() {
         year    : parseInt(document.getElementById("yearIn").value),
         master  : data,
         traffic : window._trafficExportData || null,
+        events  : window._eventExportData || null,    // ← NEW
     };
 
     try {
@@ -2625,6 +2626,7 @@ def export_pptx():
         target_year   = int(data.get("year", 2026))
         master_data   = data.get("master", {})
         traffic_data  = data.get("traffic")
+        events_data   = data.get("events")
         target_key    = f"{target_year}-{target_month:02d}"
         month_label   = f"{cal.month_name[target_month]} {target_year}"
 
@@ -2679,7 +2681,7 @@ def export_pptx():
         }
 
         # ── Step 4: Assemble PowerPoint ────────────────────────
-        pptx_buf = build_pptx(kpis, llm_text, charts, month_label)
+        pptx_buf = build_pptx(kpis, llm_text, charts, month_label, events_data=events_data,)
 
         # ── Step 5: Return file ────────────────────────────────
         month_abbr = cal.month_abbr[target_month]
