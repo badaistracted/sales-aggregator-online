@@ -12,6 +12,7 @@ from werkzeug.utils import secure_filename
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from event_parser import try_event_parser
 from chart_builder import (
     chart_monthly_sales,
     chart_top_tenants,
@@ -964,6 +965,13 @@ def parse_report(data, ext, filename):
     lines = data.get("lines") or data.get("raw_lines")
 
     if rows:
+        # ── NEW: Try event parser first ──────────────────────
+        # It has very specific markers (PERIODE row, location columns)
+        # so it won't false-positive on sales files
+        p = try_event_parser(rows, filename)
+        if p:
+            return p
+
         # Try traffic first (very specific structure)
         p = try_traffic_parser(rows)
         if p:
@@ -1464,10 +1472,11 @@ async function exportExcel() {
     btn.disabled = true;
 
      var payload = {
-        month: parseInt(document.getElementById("monthSel").value),
-        year: parseInt(document.getElementById("yearIn").value),
-        master: data,
-        traffic: window._trafficExportData || null,
+        month   : parseInt(document.getElementById("monthSel").value),
+        year    : parseInt(document.getElementById("yearIn").value),
+        master  : data,
+        traffic : window._trafficExportData || null,
+        events  : window._eventExportData || null,    // ← NEW
     };
 
     try {
@@ -1572,8 +1581,34 @@ function buildMaster(results) {
     var trafficData = { monthly: {}, daily: [] };
     var hasTraffic = false;
 
+    // Events data stored separately
+    var eventsData = { daily: [], monthly: {}, events_flat: [] };
+    var hasEvents = false;
+
     results.forEach(function(res) {
         if (res.parsed && res.parsed.success) {
+
+            // Handle events files
+            if (res.parsed.is_events || res.parsed.format === "events") {
+                hasEvents = true;
+                eventsData.daily = (eventsData.daily || []).concat(res.parsed.daily || []);
+                eventsData.events_flat = (eventsData.events_flat || []).concat(res.parsed.events_flat || []);
+                // Merge monthly event counts
+                var em = res.parsed.monthly || {};
+                Object.keys(em).forEach(function(k) {
+                    if (!eventsData.monthly[k]) {
+                        eventsData.monthly[k] = em[k];
+                    } else {
+                        eventsData.monthly[k].event_count =
+                            (eventsData.monthly[k].event_count || 0) +
+                            (em[k].event_count || 0);
+                        eventsData.monthly[k].events =
+                            (eventsData.monthly[k].events || []).concat(em[k].events || []);
+                    }
+                    allMonths[k] = true;
+                });
+                return;
+            }
 
             // Handle traffic files
             if (res.parsed.is_traffic || res.parsed.format === "traffic") {
@@ -1602,6 +1637,7 @@ function buildMaster(results) {
                 tenantMap[t].dailyCount += d.length;
                 tenantMap[t].daily = tenantMap[t].daily.concat(d);
             });
+
         } else {
             var msg = res.filename;
             if (res.parsed && res.parsed.message) msg += " — " + res.parsed.message;
@@ -1610,7 +1646,7 @@ function buildMaster(results) {
     });
 
     var tenantNames = Object.keys(tenantMap);
-    if (!tenantNames.length && !hasTraffic) {
+    if (!tenantNames.length && !hasTraffic && !hasEvents) {
         document.getElementById("masterSection").style.display = "none";
         return;
     }
@@ -1696,6 +1732,47 @@ function buildMaster(results) {
         html += "<td><b>" + fmtNum(grandRatio) + "</b></td></tr>";
     }
 
+    // Events row
+    if (hasEvents) {
+        html += '<tr style="border-top:3px solid #a78bfa"><td><b>🎪 EVENTS</b><br>' +
+                '<span class="src">Mall event count</span></td>';
+        var totalEventCount = 0;
+        months.forEach(function(mk) {
+            var em = eventsData.monthly[mk];
+            var count = em ? (em.event_count || 0) : 0;
+            if (count > 0) {
+                totalEventCount += count;
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + count + ' event(s)</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        html += "<td><b>" + totalEventCount + "</b></td></tr>";
+
+        // Events detail row — show event names for target month only
+        var targetMonthEvents = eventsData.monthly[tKey];
+        if (targetMonthEvents && targetMonthEvents.events && targetMonthEvents.events.length > 0) {
+            // Group event names by date for the tooltip-style detail
+            var eventNames = [];
+            var seen = {};
+            targetMonthEvents.events.forEach(function(e) {
+                var key = e.event_name;
+                if (!seen[key]) {
+                    seen[key] = true;
+                    eventNames.push(e.event_name);
+                }
+            });
+
+            html += '<tr><td colspan="' + (months.length + 2) + '" style="' +
+                    'padding:8px 12px;background:rgba(167,139,250,0.05);' +
+                    'font-size:0.78em;color:#a78bfa;border-top:1px solid rgba(167,139,250,0.15)">' +
+                    '<b>Events this month:</b> ' +
+                    esc(eventNames.slice(0, 12).join(" · ")) +
+                    (eventNames.length > 12 ? ' · <i>+' + (eventNames.length - 12) + ' more</i>' : '') +
+                    '</td></tr>';
+        }
+    }
+
     html += "</tbody>";
 
     document.getElementById("masterTable").innerHTML = html;
@@ -1711,10 +1788,12 @@ function buildMaster(results) {
 
     document.getElementById("masterSection").style.display = "block";
 
-    // Store for export — include traffic
+    // Store for export
     window._masterExportData = tenantMap;
     window._trafficExportData = hasTraffic ? trafficData : null;
+    window._eventExportData   = hasEvents  ? eventsData  : null;
 }
+
 function monthShort(m) {
     return ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m];
 }
@@ -1915,7 +1994,8 @@ def _set_col_width(ws, col, width):
     ws.column_dimensions[get_column_letter(col)].width = width
 
 
-def build_export_workbook(master_data, target_year, target_month, traffic_data=None):
+def build_export_workbook(master_data, target_year, target_month,
+                          traffic_data=None, events_data=None):
     """
     Build a multi-tab Excel workbook from parsed master data.
 
@@ -2270,7 +2350,131 @@ def build_export_workbook(master_data, target_year, target_month, traffic_data=N
 
         ws2.freeze_panes = "A3"
 
-    return wb
+    # ═══════════════════════════════════════════════════════════
+    # Sheet: Events (if events data provided)
+    # ═══════════════════════════════════════════════════════════
+    if events_data and events_data.get("events_flat"):
+        ws_evt = wb.create_sheet("Events")
+        ws_evt.sheet_view.showGridLines = False
+
+        # Title
+        ws_evt.merge_cells("A1:D1")
+        title = ws_evt["A1"]
+        title.value = f"Event Calendar — {month_label}"
+        _style_cell(title, fill=TITLE_FILL, font=TITLE_FONT,
+                    align=Alignment(horizontal="center", vertical="center"))
+        ws_evt.row_dimensions[1].height = 32
+
+        # Headers
+        evt_headers = ["Date", "Event Name", "Location", "Category"]
+        for c, h in enumerate(evt_headers, 1):
+            cell = ws_evt.cell(row=2, column=c, value=h)
+            _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+
+        _set_col_width(ws_evt, 1, 16)
+        _set_col_width(ws_evt, 2, 55)
+        _set_col_width(ws_evt, 3, 20)
+        _set_col_width(ws_evt, 4, 18)
+
+        # Filter to target month
+        target_events = [e for e in events_data["events_flat"]
+                         if e["date"].startswith(target_key)]
+
+        for i, evt in enumerate(target_events):
+            row = 3 + i
+            fill = ALT_FILL_1 if i % 2 == 0 else ALT_FILL_2
+
+            try:
+                dt = datetime.strptime(evt["date"], "%Y-%m-%d").date()
+            except ValueError:
+                dt = evt["date"]
+
+            ws_evt.cell(row=row, column=1, value=dt)
+            _style_cell(ws_evt.cell(row=row, column=1), fill=fill, font=DATA_FONT,
+                        align=Alignment(horizontal="center"),
+                        num_fmt="DD-MMM-YYYY" if isinstance(dt, date) else None)
+
+            ws_evt.cell(row=row, column=2, value=evt["event_name"])
+            _style_cell(ws_evt.cell(row=row, column=2), fill=fill, font=DATA_FONT,
+                        align=Alignment(horizontal="left"))
+
+            ws_evt.cell(row=row, column=3, value=evt["location"])
+            _style_cell(ws_evt.cell(row=row, column=3), fill=fill, font=DATA_FONT,
+                        align=Alignment(horizontal="center"))
+
+            ws_evt.cell(row=row, column=4, value=evt.get("category", ""))
+            _style_cell(ws_evt.cell(row=row, column=4), fill=fill, font=DATA_FONT,
+                        align=Alignment(horizontal="center"))
+
+        ws_evt.freeze_panes = "A3"
+
+        # Also add EVENTS column to each tenant daily sheet
+        # Build date -> events lookup string
+        events_by_date = {}
+        for evt in events_data.get("events_flat", []):
+            d = evt["date"]
+            if d not in events_by_date:
+                events_by_date[d] = []
+            events_by_date[d].append(evt["event_name"])
+
+        events_lookup = {
+            d: " | ".join(names)
+            for d, names in events_by_date.items()
+        }
+
+        # Now go through each tenant sheet and add a 7th column
+        # We need to re-open the sheets we already created
+        # We already have tenant_names list — iterate and find their sheets
+        for tenant in tenant_names:
+            tm = master_data[tenant]
+            daily = tm.get("daily", [])
+            if not daily:
+                continue
+            target_daily = [d for d in daily if d["date"].startswith(target_key)]
+            if not target_daily:
+                continue
+
+            safe_name = re.sub(r"[^\w\s\-]", "", tenant)[:28]
+            if safe_name not in [ws.title for ws in wb.worksheets]:
+                continue
+
+            ws_tenant = wb[safe_name]
+
+            # Add EVENTS header in column G
+            cell = ws_tenant.cell(row=2, column=7, value="Events")
+            _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
+            _set_col_width(ws_tenant, 7, 45)
+
+            # Fill events for each daily row
+            for i, d in enumerate(target_daily):
+                row = 3 + i
+                date_str = d["date"]
+                event_text = events_lookup.get(date_str, "-")
+
+                try:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    dt = None
+
+                is_weekend = dt.weekday() >= 5 if dt else False
+                fit_fill = WEEKEND_FILL if is_weekend else (ALT_FILL_1 if i % 2 == 0 else ALT_FILL_2)
+
+                ws_tenant.cell(row=row, column=7, value=event_text)
+                _style_cell(
+                    ws_tenant.cell(row=row, column=7),
+                    fill=fit_fill,
+                    font=Font(color="2C3E50", size=9, name="Calibri"),
+                    align=Alignment(horizontal="left", wrap_text=True),
+                )
+
+            # Total row — blank or "—"
+            total_row = 3 + len(target_daily)
+            ws_tenant.cell(row=total_row, column=7, value="—")
+            _style_cell(ws_tenant.cell(row=total_row, column=7),
+                        fill=GRAND_FILL, font=GRAND_FONT,
+                        align=Alignment(horizontal="center"))
+
+        return wb
 
 # ══════════════════════════════════════════════════════════════
 #  ROUTES
@@ -2350,6 +2554,11 @@ def upload():
             parsed = parse_report(data, ext, f.filename)
             entry["parsed"] = parsed
 
+            # If it's events data, flag and store separately
+            if parsed.get("is_events"):
+                entry["parsed"]["is_events"] = True
+                entry["is_events_file"] = True
+
             # If it's traffic data, store separately
             if parsed.get("format") == "traffic":
                 entry["parsed"]["is_traffic"] = True
@@ -2373,11 +2582,16 @@ def export():
         target_year = int(data.get("year", 2026))
         master_data = data.get("master", {})
         traffic_data = data.get("traffic")
+        events_data  = data.get("events")        # ← NEW
 
-        if not master_data and not traffic_data:
-            return jsonify({"error": "No data to export"}), 400
+    if not master_data and not traffic_data:
+        return jsonify({"error": "No data to export"}), 400
 
-        wb = build_export_workbook(master_data, target_year, target_month, traffic_data)
+    wb = build_export_workbook(
+        master_data, target_year, target_month,
+        traffic_data=traffic_data,
+        events_data=events_data,             # ← NEW
+    )
 
         month_name = cal.month_abbr[target_month]
         filename = f"Tenant_Report_{month_name}_{target_year}.xlsx"
