@@ -1282,7 +1282,7 @@ function buildMaster(results) {
         if (res.parsed && res.parsed.success) {
             var ts = res.parsed.tenants;
             Object.keys(ts).forEach(function(t) {
-                if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0 };
+                if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0, daily: [] };
                 if (tenantMap[t].files.indexOf(res.filename) === -1)
                     tenantMap[t].files.push(res.filename);
                 var m = ts[t].monthly || {};
@@ -1290,7 +1290,9 @@ function buildMaster(results) {
                     if (!(k in tenantMap[t].monthly)) tenantMap[t].monthly[k] = m[k];
                     allMonths[k] = true;
                 });
-                tenantMap[t].dailyCount += (ts[t].daily || []).length;
+                var d = ts[t].daily || [];
+                tenantMap[t].dailyCount += d.length;
+                tenantMap[t].daily = tenantMap[t].daily.concat(d);
             });
         } else {
             var msg = res.filename;
