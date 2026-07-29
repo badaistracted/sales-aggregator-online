@@ -344,6 +344,113 @@ def _match_alias(cell, aliases):
             return True
     return False
 
+def _norm_header(x):
+    return re.sub(r"\s+", " ", str(x).strip().lower())
+
+
+def _score_date_header(cell):
+    """
+    Strict date-header scoring.
+    IMPORTANT: does NOT treat 'periode' as a date column header.
+    """
+    c = _norm_header(cell)
+
+    if c in ("tgl", "tanggal", "date"):
+        return 100
+    if c in ("transaction date", "trans date", "tanggal transaksi", "tgl transaksi"):
+        return 95
+    if c.startswith("tanggal ") or c.startswith("tgl "):
+        return 90
+    if c in ("datetime", "waktu"):
+        return 60
+
+    return 0
+
+
+def _score_sales_header(cell):
+    """
+    Prioritise the best sales column, not the first one found.
+    Example:
+      TOTAL PENJUALAN  >  NETT PENJUALAN  >  PENJUALAN
+    """
+    c = _norm_header(cell)
+
+    # strongest matches
+    if c in ("total penjualan", "total sales", "gross sales", "sales total", "sales amount", "total amount"):
+        return 100
+
+    # strong partial matches
+    if "total penjualan" in c or "total sales" in c:
+        return 98
+
+    # next-best choices
+    if c in ("nett penjualan", "net penjualan", "net sales", "nett sales", "net revenue", "gross revenue"):
+        return 90
+    if "nett penjualan" in c or "net sales" in c or "net revenue" in c:
+        return 88
+
+    # still useful
+    if c in ("pendapatan", "revenue", "omzet", "omset"):
+        return 80
+    if "pendapatan" in c or "revenue" in c or "omzet" in c or "omset" in c:
+        return 78
+
+    # weakest generic matches
+    if c in ("penjualan", "sales", "amount", "nilai", "jumlah"):
+        return 60
+    if "penjualan" in c or "sales" in c:
+        return 55
+
+    return 0
+
+
+def _finance_header_bonus(row):
+    """
+    Bonus for rows that look like real financial header rows.
+    """
+    bonus = 0
+    for cell in row:
+        c = _norm_header(cell)
+        if any(tok in c for tok in (
+            "penjualan", "sales", "total", "nett", "net",
+            "revenue", "pendapatan", "fnb", "phi", "tax"
+        )):
+            bonus += 1
+    return min(bonus, 6) * 4
+
+
+def _candidate_data_score(rows, header_idx, date_c, sales_c):
+    """
+    Validate candidate header row using the rows below it.
+    We want:
+    - date column to parse as dates
+    - sales column to parse as numbers
+    """
+    checked = 0
+    good_dates = 0
+    good_nums = 0
+
+    for r in rows[header_idx + 1: header_idx + 13]:
+        dv = r[date_c] if date_c < len(r) else ""
+        sv = r[sales_c] if sales_c < len(r) else ""
+
+        if str(dv).strip() == "" and str(sv).strip() == "":
+            continue
+
+        checked += 1
+
+        dt = pd.to_datetime(str(dv).strip(), dayfirst=True, errors="coerce")
+        if not pd.isna(dt):
+            good_dates += 1
+
+        if parse_number(sv) is not None:
+            good_nums += 1
+
+    if checked == 0:
+        return 0
+
+    return (good_dates / checked) * 40 + (good_nums / checked) * 40
+
 
 # ─── Parser 1: Excel Pivot (tenants as rows, months as columns) ──
 
@@ -414,34 +521,76 @@ def try_excel_pivot(rows):
 # ─── Parser 2: Excel Columnar (Date | Sales columns) ──────────
 
 def try_excel_columnar(rows):
-    header_idx = None
-    date_c = sales_c = None
+    """
+    Detect a classic daily table with a true header row somewhere below title/logo rows.
+    Example:
+      TGL | PENJUALAN | FNB | CHOO-CHOO TRAIN | TOTAL PENJUALAN | ...
+    """
+    best = None
 
     for idx, row in enumerate(rows[:50]):
-        dc = sc = None
-        for c, cell in enumerate(row):
-            if dc is None and _match_alias(cell, DATE_ALIASES):
-                dc = c
-            if sc is None and _match_alias(cell, SALES_ALIASES):
-                sc = c
-        if dc is not None and sc is not None:
-            header_idx, date_c, sales_c = idx, dc, sc
-            break
+        date_candidates = []
+        sales_candidates = []
 
-    if header_idx is None:
+        for c, cell in enumerate(row):
+            ds = _score_date_header(cell)
+            ss = _score_sales_header(cell)
+
+            if ds > 0:
+                date_candidates.append((ds, c, str(cell)))
+            if ss > 0:
+                sales_candidates.append((ss, c, str(cell)))
+
+        if not date_candidates or not sales_candidates:
+            continue
+
+        best_date_score, date_c, date_label = max(date_candidates, key=lambda x: x[0])
+        best_sales_score, sales_c, sales_label = max(sales_candidates, key=lambda x: x[0])
+
+        score = (
+            best_date_score +
+            best_sales_score +
+            _finance_header_bonus(row) +
+            _candidate_data_score(rows, idx, date_c, sales_c)
+        )
+
+        if best is None or score > best["score"]:
+            best = {
+                "score": score,
+                "header_idx": idx,
+                "date_c": date_c,
+                "sales_c": sales_c,
+                "date_label": date_label,
+                "sales_label": sales_label,
+            }
+
+    if best is None:
         return None
+
+    header_idx = best["header_idx"]
+    date_c     = best["date_c"]
+    sales_c    = best["sales_c"]
 
     daily = []
     for r in rows[header_idx + 1:]:
         if date_c >= len(r) or sales_c >= len(r):
             continue
-        dt = pd.to_datetime(str(r[date_c]), dayfirst=True, errors="coerce")
-        if dt is None or pd.isna(dt):
+
+        raw_date = str(r[date_c]).strip()
+        raw_sales = r[sales_c]
+
+        dt = pd.to_datetime(raw_date, dayfirst=True, errors="coerce")
+        if pd.isna(dt):
             continue
-        s = parse_number(r[sales_c])
+
+        s = parse_number(raw_sales)
         if s is None:
             continue
-        daily.append({"date": str(dt.date()), "sales": s})
+
+        daily.append({
+            "date": str(dt.date()),
+            "sales": s,
+        })
 
     if not daily:
         return None
@@ -454,9 +603,17 @@ def try_excel_columnar(rows):
     return {
         "success": True,
         "format": "excel_columnar",
-        "tenants": {"__FROM_FILENAME__": {"monthly": monthly, "daily": daily}},
-        "message": f"Columnar: {len(daily)} daily rows. "
-                   f"Header at row {header_idx + 1} (title rows above ignored).",
+        "tenants": {
+            "__FROM_FILENAME__": {
+                "monthly": monthly,
+                "daily": daily,
+            }
+        },
+        "message": (
+            f"Columnar: {len(daily)} daily rows. "
+            f"Header row {header_idx + 1}. "
+            f"Date='{best['date_label']}' | Sales='{best['sales_label']}'"
+        ),
     }
 
 
