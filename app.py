@@ -12,6 +12,14 @@ from werkzeug.utils import secure_filename
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from chart_builder import (
+    chart_monthly_sales,
+    chart_top_tenants,
+    chart_traffic,
+    chart_daily_sales,
+)
+from llm_writer import _build_kpis, generate_slide_text
+from pptx_builder import build_pptx
 
 app = Flask(__name__)
 UPLOAD_FOLDER = Path("temp_uploads")
@@ -1265,9 +1273,15 @@ HTML_UI = r"""
     <div class="config-card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
             <div class="config-title" style="margin-bottom:0">📊 Master Report — Preview</div>
-            <button class="browse-btn btn-folder" id="exportBtn" onclick="exportExcel()" style="margin:0">
-                ⬇️ Export to Excel
-            </button>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <button class="browse-btn btn-folder" id="exportBtn" onclick="exportExcel()" style="margin:0">
+                    ⬇️ Export Excel
+                </button>
+                <button class="browse-btn" id="exportPptxBtn" onclick="exportPptx()"
+                    style="margin:0;background:#7c3aed;color:#fff">
+                    📊 Export PowerPoint
+                </button>
+            </div>
         </div>
         <div class="master-warn" id="masterWarn"></div>
         <div class="master-table-wrap" style="margin-top:12px">
@@ -1488,6 +1502,61 @@ async function exportExcel() {
         alert("Export error: " + err.message);
     } finally {
         btn.textContent = "⬇️ Export to Excel";
+        btn.disabled = false;
+    }
+}
+
+async function exportPptx() {
+    var data = window._masterExportData;
+    if (!data || Object.keys(data).length === 0) {
+        alert("No data to export. Upload and process files first.");
+        return;
+    }
+
+    var btn = document.getElementById("exportPptxBtn");
+    btn.textContent = "⏳ Building PowerPoint...";
+    btn.disabled = true;
+
+    var payload = {
+        month   : parseInt(document.getElementById("monthSel").value),
+        year    : parseInt(document.getElementById("yearIn").value),
+        master  : data,
+        traffic : window._trafficExportData || null,
+    };
+
+    try {
+        var resp = await fetch("/export_pptx", {
+            method  : "POST",
+            headers : {"Content-Type": "application/json"},
+            body    : JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+            var err = await resp.json();
+            alert("Export failed: " + (err.error || "Unknown error"));
+            return;
+        }
+
+        var blob = await resp.blob();
+        var url  = URL.createObjectURL(blob);
+        var a    = document.createElement("a");
+        a.href   = url;
+
+        var months = ["","Jan","Feb","Mar","Apr","May","Jun",
+                      "Jul","Aug","Sep","Oct","Nov","Dec"];
+        var m = parseInt(document.getElementById("monthSel").value);
+        var y = document.getElementById("yearIn").value;
+        a.download = "Mall_Report_" + months[m] + "_" + y + ".pptx";
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } catch (err) {
+        alert("PowerPoint export error: " + err.message);
+    } finally {
+        btn.textContent = "📊 Export PowerPoint";
         btn.disabled = false;
     }
 }
@@ -2325,6 +2394,97 @@ def export():
 
     except Exception as e:
         return jsonify({"error": "Export failed: " + str(e)}), 500
+
+@app.route("/export_pptx", methods=["POST"])
+def export_pptx():
+    """
+    Generate and download the monthly PowerPoint.
+
+    Expects same JSON body as /export, plus optional "openai_key".
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+
+        target_month  = int(data.get("month", 1))
+        target_year   = int(data.get("year", 2026))
+        master_data   = data.get("master", {})
+        traffic_data  = data.get("traffic")
+        target_key    = f"{target_year}-{target_month:02d}"
+        month_label   = f"{cal.month_name[target_month]} {target_year}"
+
+        if not master_data:
+            return jsonify({"error": "No sales data to build report"}), 400
+
+        # ── Step 1: Compute KPIs (pure Python) ────────────────
+        kpis = _build_kpis(master_data, traffic_data, target_year, target_month)
+
+        # ── Step 2: LLM writes commentary ─────────────────────
+        # Optionally allow front-end to pass an API key
+        if data.get("openai_key"):
+            import os
+            os.environ["OPENAI_API_KEY"] = data["openai_key"]
+
+        llm_text = generate_slide_text(kpis)
+
+        # ── Step 3: Build charts ───────────────────────────────
+        # Monthly sales totals across all tenants
+        monthly_totals = {}
+        for tm in master_data.values():
+            for mk, v in tm.get("monthly", {}).items():
+                monthly_totals[mk] = monthly_totals.get(mk, 0) + v
+
+        # Sales per tenant for target month
+        tenant_sales_target = {
+            tenant: tm.get("monthly", {}).get(target_key, 0)
+            for tenant, tm in master_data.items()
+            if tm.get("monthly", {}).get(target_key, 0) > 0
+        }
+
+        # All daily rows combined
+        all_daily = []
+        for tm in master_data.values():
+            all_daily.extend(tm.get("daily", []))
+
+        charts = {
+            "monthly_sales": chart_monthly_sales(monthly_totals, target_key)
+                             if monthly_totals else None,
+
+            "top_tenants"  : chart_top_tenants(tenant_sales_target, target_key)
+                             if tenant_sales_target else None,
+
+            "traffic"      : chart_traffic(
+                                 traffic_data.get("monthly", {}) if traffic_data else {},
+                                 monthly_totals,
+                                 target_key,
+                             ) if traffic_data else None,
+
+            "daily_sales"  : chart_daily_sales(all_daily, target_key)
+                             if all_daily else None,
+        }
+
+        # ── Step 4: Assemble PowerPoint ────────────────────────
+        pptx_buf = build_pptx(kpis, llm_text, charts, month_label)
+
+        # ── Step 5: Return file ────────────────────────────────
+        month_abbr = cal.month_abbr[target_month]
+        filename   = f"Mall_Report_{month_abbr}_{target_year}.pptx"
+
+        return send_file(
+            pptx_buf,
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument"
+                ".presentationml.presentation"
+            ),
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"PPTX export failed: {str(e)}"}), 500
 
 
 if __name__ == "__main__":
