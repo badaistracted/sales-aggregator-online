@@ -734,6 +734,203 @@ def try_pdf_daily(lines, filename=""):
                    f"Sales = leftmost number column.",
     }
 
+# ─── Parser 4: Traffic Data ──────────────────────────────────
+
+INDO_DAYS = {
+    "senin": "Monday", "selasa": "Tuesday", "rabu": "Wednesday",
+    "kamis": "Thursday", "jumat": "Friday", "sabtu": "Saturday",
+    "minggu": "Sunday",
+}
+
+INDO_MONTHS_FULL = {
+    "januari": 1, "februari": 2, "maret": 3, "april": 4,
+    "mei": 5, "juni": 6, "juli": 7, "agustus": 8,
+    "september": 9, "oktober": 10, "november": 11, "desember": 12,
+    "nopember": 11,
+}
+
+# Merge with english
+ALL_MONTHS_FULL = {}
+ALL_MONTHS_FULL.update(INDO_MONTHS_FULL)
+ALL_MONTHS_FULL.update({
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+})
+
+
+def _parse_indo_date(text):
+    """
+    Parse Indonesian date strings like:
+      'Jumat, 19 Desember 2025'
+      'Sabtu, 03 Januari 2026'
+      'Kamis, 23  Januari 2026'  (extra spaces)
+    Returns a date object or None.
+    """
+    s = str(text).strip()
+    if not s:
+        return None
+
+    # Remove day name prefix: "Jumat, " or "Friday, "
+    s = re.sub(r"^[A-Za-z]+,?\s*", "", s).strip()
+
+    # Now we should have: "19 Desember 2025" or "03 Januari 2026"
+    m = re.match(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", s)
+    if not m:
+        return None
+
+    day = int(m.group(1))
+    month_name = m.group(2).lower()
+    year = int(m.group(3))
+
+    month_num = ALL_MONTHS_FULL.get(month_name)
+    if not month_num:
+        return None
+
+    try:
+        return date(year, month_num, day)
+    except ValueError:
+        return None
+
+
+def _is_month_separator(row):
+    """
+    Detect rows like: 'DESEMBER 2025' or 'JANUARI 2026'
+    These are month header separators in the traffic sheet.
+    Returns (year, month) or None.
+    """
+    # Join all non-empty cells
+    text = " ".join(str(c).strip() for c in row if str(c).strip() and str(c).strip() != "nan")
+    text = text.strip()
+
+    if not text:
+        return None
+
+    # Pattern: "DESEMBER 2025" or "JANUARI 2026"
+    m = re.match(r"^([A-Za-z]+)\s+(\d{4})$", text)
+    if m:
+        month_name = m.group(1).lower()
+        year = int(m.group(2))
+        month_num = ALL_MONTHS_FULL.get(month_name)
+        if month_num and 2020 <= year <= 2035:
+            return (year, month_num)
+
+    return None
+
+
+def try_traffic_parser(rows):
+    """
+    Parse traffic Excel files with this structure:
+
+    TRAFFIC PENGUNJUNG DARI QTY KDR MASUK
+    NO | HARI/TANGGAL | MOBIL | MOTOR | BUS | HIACE | TOTAL | 140%
+    DESEMBER 2025
+    1  | Jumat, 19 Desember 2025 | 19,536 | 8,530 | 0 | 0 | 28,066 | 39,292
+    ...
+    JANUARI 2026
+    1  | Kamis, 01 Januari 2026 | 16,428 | 9,056 | ...
+    """
+
+    # Step 1: Find the header row with TOTAL column
+    header_idx = None
+    total_col = None
+    date_col = None
+
+    for idx, row in enumerate(rows[:20]):
+        for c, cell in enumerate(row):
+            norm = _norm_header(cell)
+
+            # Find date column
+            if date_col is None and any(k in norm for k in (
+                "hari", "tanggal", "tgl", "date",
+                "hari/ tanggal", "hari/tanggal", "hari / tanggal",
+            )):
+                date_col = c
+
+            # Find TOTAL column
+            if norm == "total":
+                total_col = c
+                header_idx = idx
+
+    if header_idx is None or total_col is None:
+        return None
+
+    # If no explicit date column found, assume column 1 (B)
+    if date_col is None:
+        date_col = 1
+
+    # Step 2: Parse daily rows
+    daily = []
+    current_month_block = None
+
+    for row in rows[header_idx + 1:]:
+        # Check if this is a month separator row
+        month_sep = _is_month_separator(row)
+        if month_sep:
+            current_month_block = month_sep
+            continue
+
+        # Check if this row has a parseable date
+        if date_col >= len(row):
+            continue
+
+        raw_date = str(row[date_col]).strip()
+
+        # Skip empty rows, summary rows
+        if not raw_date or raw_date.lower() in ("nan", "none", ""):
+            continue
+
+        # Try to parse the date
+        parsed_date = _parse_indo_date(raw_date)
+
+        # Also try standard date parsing as fallback
+        if parsed_date is None:
+            parsed_date = parse_date_cell(raw_date)
+
+        if parsed_date is None:
+            continue
+
+        # Get the TOTAL value
+        if total_col >= len(row):
+            continue
+
+        traffic_val = parse_number(row[total_col])
+        if traffic_val is None or traffic_val <= 0:
+            continue
+
+        daily.append({
+            "date": str(parsed_date),
+            "traffic": traffic_val,
+        })
+
+    if len(daily) < 3:
+        return None
+
+    # Step 3: Group by month
+    monthly = {}
+    for d in daily:
+        key = d["date"][:7]
+        monthly[key] = monthly.get(key, 0) + d["traffic"]
+
+    # Get all months found
+    months_found = sorted(monthly.keys())
+    months_labels = ", ".join(
+        f"{cal.month_abbr[int(m.split('-')[1])]}-{m.split('-')[0][2:]}"
+        for m in months_found
+    )
+
+    return {
+        "success": True,
+        "format": "traffic",
+        "daily": daily,
+        "monthly": monthly,
+        "message": (
+            f"Traffic: {len(daily)} daily rows across {len(months_found)} month(s) "
+            f"({months_labels}). "
+            f"Using column '{rows[header_idx][total_col] if total_col < len(rows[header_idx]) else 'TOTAL'}'"
+        ),
+    }
+
 
 # ─── Master Parse Dispatcher ─────────────────────────────────
 
@@ -742,15 +939,22 @@ def parse_report(data, ext, filename):
     lines = data.get("lines") or data.get("raw_lines")
 
     if rows:
-        p = try_excel_pivot(rows)
+        # Try traffic first (very specific structure)
+        p = try_traffic_parser(rows)
         if p:
             return p
+
+        # Try columnar (Date + Sales columns)
         p = try_excel_columnar(rows)
         if p:
-            # Resolve filename placeholder
             stem = Path(filename).stem
             if "__FROM_FILENAME__" in p["tenants"]:
                 p["tenants"][stem] = p["tenants"].pop("__FROM_FILENAME__")
+            return p
+
+        # Try pivot (tenants as rows, months as columns)
+        p = try_excel_pivot(rows)
+        if p:
             return p
 
     if lines:
@@ -768,8 +972,7 @@ def parse_report(data, ext, filename):
         "success": False,
         "format": None,
         "tenants": {},
-        "message": "Could not detect report structure (no pivot headers, "
-                   "no Date/Sales columns, no daily rows).",
+        "message": "Could not detect report structure.",
     }
 
 
@@ -1229,10 +1432,11 @@ async function exportExcel() {
     btn.textContent = "⏳ Generating...";
     btn.disabled = true;
 
-    var payload = {
+     var payload = {
         month: parseInt(document.getElementById("monthSel").value),
         year: parseInt(document.getElementById("yearIn").value),
         master: data,
+        traffic: window._trafficExportData || null,
     };
 
     try {
@@ -1278,8 +1482,26 @@ function buildMaster(results) {
     var allMonths = {};
     var unparsed = [];
 
+    // Traffic data stored separately
+    var trafficData = { monthly: {}, daily: [] };
+    var hasTraffic = false;
+
     results.forEach(function(res) {
         if (res.parsed && res.parsed.success) {
+
+            // Handle traffic files
+            if (res.parsed.is_traffic || res.parsed.format === "traffic") {
+                hasTraffic = true;
+                var tm = res.parsed.monthly || {};
+                Object.keys(tm).forEach(function(k) {
+                    trafficData.monthly[k] = (trafficData.monthly[k] || 0) + tm[k];
+                    allMonths[k] = true;
+                });
+                trafficData.daily = trafficData.daily.concat(res.parsed.daily || []);
+                return;
+            }
+
+            // Handle sales files
             var ts = res.parsed.tenants;
             Object.keys(ts).forEach(function(t) {
                 if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0, daily: [] };
@@ -1302,7 +1524,7 @@ function buildMaster(results) {
     });
 
     var tenantNames = Object.keys(tenantMap);
-    if (!tenantNames.length) {
+    if (!tenantNames.length && !hasTraffic) {
         document.getElementById("masterSection").style.display = "none";
         return;
     }
@@ -1310,11 +1532,11 @@ function buildMaster(results) {
     var months = Object.keys(allMonths).sort();
     var tKey = targetKey();
 
-    // Sort tenants by target-month value descending
     tenantNames.sort(function(a, b) {
         return (tenantMap[b].monthly[tKey] || 0) - (tenantMap[a].monthly[tKey] || 0);
     });
 
+    // Build table
     var html = "<thead><tr><th>Tenant</th>";
     months.forEach(function(mk) {
         var parts = mk.split("-");
@@ -1326,6 +1548,7 @@ function buildMaster(results) {
     var colTotals = {};
     var grand = 0;
 
+    // Sales rows
     tenantNames.forEach(function(t) {
         var tm = tenantMap[t];
         var rowTotal = 0;
@@ -1347,11 +1570,46 @@ function buildMaster(results) {
         html += "<td><b>" + fmtNum(rowTotal) + "</b></td></tr>";
     });
 
-    html += '<tr class="total-row"><td>🏆 GRAND TOTAL</td>';
+    // Sales total row
+    html += '<tr class="total-row"><td>💰 TOTAL SALES</td>';
     months.forEach(function(mk) {
         html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(colTotals[mk] || 0) + '</td>';
     });
     html += "<td>" + fmtNum(grand) + "</td></tr>";
+
+    // Traffic row
+    if (hasTraffic) {
+        html += '<tr style="border-top:3px solid #3b82f6"><td><b>🚗 TRAFFIC</b><br>' +
+                '<span class="src">Visitor count</span></td>';
+        var trafficTotal = 0;
+        months.forEach(function(mk) {
+            var v = trafficData.monthly[mk];
+            if (v !== undefined) {
+                trafficTotal += v;
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        html += "<td><b>" + fmtNum(trafficTotal) + "</b></td></tr>";
+
+        // Sales per visitor row
+        html += '<tr><td><b>📊 SALES / VISITOR</b><br>' +
+                '<span class="src">Average spend per visitor</span></td>';
+        months.forEach(function(mk) {
+            var sales = colTotals[mk] || 0;
+            var traffic = trafficData.monthly[mk] || 0;
+            var ratio = traffic > 0 ? Math.round(sales / traffic) : 0;
+            if (ratio > 0) {
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(ratio) + '</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        var grandRatio = (trafficTotal > 0) ? Math.round(grand / trafficTotal) : 0;
+        html += "<td><b>" + fmtNum(grandRatio) + "</b></td></tr>";
+    }
+
     html += "</tbody>";
 
     document.getElementById("masterTable").innerHTML = html;
@@ -1367,10 +1625,10 @@ function buildMaster(results) {
 
     document.getElementById("masterSection").style.display = "block";
 
-    // Store data for export
+    // Store for export — include traffic
     window._masterExportData = tenantMap;
+    window._trafficExportData = hasTraffic ? trafficData : null;
 }
-
 function monthShort(m) {
     return ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m];
 }
@@ -1571,7 +1829,7 @@ def _set_col_width(ws, col, width):
     ws.column_dimensions[get_column_letter(col)].width = width
 
 
-def build_export_workbook(master_data, target_year, target_month):
+def build_export_workbook(master_data, target_year, target_month, traffic_data=None):
     """
     Build a multi-tab Excel workbook from parsed master data.
 
@@ -1693,7 +1951,62 @@ def build_export_workbook(master_data, target_year, target_month):
     cell = ws.cell(row=grand_row, column=total_col, value=grand_total)
     _style_cell(cell, fill=GRAND_FILL, font=GRAND_FONT,
                  align=Alignment(horizontal="right"), num_fmt="#,##0")
+# Traffic row
+    if traffic_data and traffic_data.get("monthly"):
+        traffic_row = grand_row + 2
+        ws.cell(row=grand_row + 1, column=1)  # blank separator row
 
+        cell = ws.cell(row=traffic_row, column=1, value="🚗 TRAFFIC (Visitors)")
+        _style_cell(cell, fill=PatternFill("solid", fgColor="2E86C1"),
+                     font=Font(color="FFFFFF", bold=True, size=11, name="Calibri"),
+                     align=Alignment(horizontal="left", vertical="center"))
+
+        traffic_total = 0
+        for j, mk in enumerate(all_months):
+            col = 2 + j
+            v = traffic_data["monthly"].get(mk)
+            if v is not None:
+                cell = ws.cell(row=traffic_row, column=col, value=v)
+                fill = TARGET_FILL if mk == target_key else ALT_FILL_1
+                _style_cell(cell, fill=fill, font=DATA_FONT_BOLD,
+                             align=Alignment(horizontal="right"), num_fmt="#,##0")
+                traffic_total += v
+            else:
+                cell = ws.cell(row=traffic_row, column=col, value="—")
+                _style_cell(cell, fill=ALT_FILL_1, font=NO_DATA_FONT,
+                             align=Alignment(horizontal="center"))
+
+        cell = ws.cell(row=traffic_row, column=total_col, value=traffic_total)
+        _style_cell(cell, fill=TOTAL_FILL, font=TOTAL_FONT,
+                     align=Alignment(horizontal="right"), num_fmt="#,##0")
+
+        # Sales per visitor row
+        spv_row = traffic_row + 1
+        cell = ws.cell(row=spv_row, column=1, value="📊 SALES / VISITOR")
+        _style_cell(cell, fill=PatternFill("solid", fgColor="1A5276"),
+                     font=Font(color="FFFFFF", bold=True, size=11, name="Calibri"),
+                     align=Alignment(horizontal="left", vertical="center"))
+
+        for j, mk in enumerate(all_months):
+            col = 2 + j
+            sales = col_totals.get(mk, 0)
+            traffic = traffic_data["monthly"].get(mk, 0)
+            ratio = round(sales / traffic) if traffic > 0 else 0
+
+            if ratio > 0:
+                cell = ws.cell(row=spv_row, column=col, value=ratio)
+                fill = TARGET_FILL if mk == target_key else ALT_FILL_2
+                _style_cell(cell, fill=fill, font=DATA_FONT,
+                             align=Alignment(horizontal="right"), num_fmt="#,##0")
+            else:
+                cell = ws.cell(row=spv_row, column=col, value="—")
+                _style_cell(cell, fill=ALT_FILL_2, font=NO_DATA_FONT,
+                             align=Alignment(horizontal="center"))
+
+        overall_ratio = round(grand_total / traffic_total) if traffic_total > 0 else 0
+        cell = ws.cell(row=spv_row, column=total_col, value=overall_ratio)
+        _style_cell(cell, fill=TOTAL_FILL, font=TOTAL_FONT,
+                     align=Alignment(horizontal="right"), num_fmt="#,##0")
     ws.freeze_panes = "B3"
 
     # ═══════════════════════════════════════════════════════════
@@ -1873,7 +2186,12 @@ def upload():
             entry["month_check"] = validate_month(detected, target_year, target_month)
 
             # ─── PHASE 2: Parse the report structure ────────────
-            entry["parsed"] = parse_report(data, ext, f.filename)
+            parsed = parse_report(data, ext, f.filename)
+            entry["parsed"] = parsed
+
+            # If it's traffic data, store separately
+            if parsed.get("format") == "traffic":
+                entry["parsed"]["is_traffic"] = True
 
         results.append(entry)
 
@@ -1893,11 +2211,12 @@ def export():
         target_month = int(data.get("month", 1))
         target_year = int(data.get("year", 2026))
         master_data = data.get("master", {})
+        traffic_data = data.get("traffic")
 
-        if not master_data:
-            return jsonify({"error": "No tenant data to export"}), 400
+        if not master_data and not traffic_data:
+            return jsonify({"error": "No data to export"}), 400
 
-        wb = build_export_workbook(master_data, target_year, target_month)
+        wb = build_export_workbook(master_data, target_year, target_month, traffic_data)
 
         month_name = cal.month_abbr[target_month]
         filename = f"Tenant_Report_{month_name}_{target_year}.xlsx"
@@ -1905,7 +2224,6 @@ def export():
 
         wb.save(filepath)
 
-        from flask import send_file
         return send_file(
             filepath,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
