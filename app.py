@@ -852,7 +852,9 @@ def try_traffic_parser(rows):
                 found_date = c
 
             # Find 140% column (priority)
-            if "140" in str(cell).strip():
+            # Excel might store it as: "140%", "1.4", "1.40", 1.4, etc.
+            raw = str(cell).strip()
+            if "140" in raw or raw in ("1.4", "1.40", "1.4000", "140"):
                 found_140 = c
 
             # Find TOTAL column (fallback)
