@@ -7,3 +7,4 @@ werkzeug
 pytesseract
 pdf2image
 holidays
+openpyxl
