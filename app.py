@@ -2026,9 +2026,23 @@ def build_export_workbook(master_data, target_year, target_month, traffic_data=N
                      align=Alignment(horizontal="right"), num_fmt="#,##0")
     ws.freeze_panes = "B3"
 
-    # ═══════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════════
     # Sheet 2+: Individual Tenant Sheets (daily data)
     # ═══════════════════════════════════════════════════════════
+
+    # Build a daily traffic lookup dict once: {"2026-05-01": 28066, ...}
+    # This is mall-wide traffic, same value shown on every tenant sheet.
+    daily_traffic_lookup = {}
+    if traffic_data and traffic_data.get("daily"):
+        for d in traffic_data["daily"]:
+            date_str = d.get("date", "")
+            traffic_val = d.get("traffic", 0)
+            if date_str and traffic_val:
+                # If multiple rows for same date, sum them
+                daily_traffic_lookup[date_str] = (
+                    daily_traffic_lookup.get(date_str, 0) + traffic_val
+                )
+
     for tenant in tenant_names:
         tm = master_data[tenant]
         daily = tm.get("daily", [])
@@ -2045,29 +2059,36 @@ def build_export_workbook(master_data, target_year, target_month, traffic_data=N
         ws2 = wb.create_sheet(safe_name)
         ws2.sheet_view.showGridLines = False
 
-        # Title
-        ws2.merge_cells("A1:E1")
+        # Title — spans all 6 columns now
+        ws2.merge_cells("A1:F1")
         title = ws2["A1"]
         title.value = f"{tenant} — Daily Sales ({month_label})"
         _style_cell(title, fill=TITLE_FILL, font=TITLE_FONT,
-                      align=Alignment(horizontal="center", vertical="center"))
+                    align=Alignment(horizontal="center", vertical="center"))
         ws2.row_dimensions[1].height = 32
 
         # Headers
-        headers = ["Date", "Day", "Day Type", "Sales (IDR)", "Source File"]
+        # Col 1: Date
+        # Col 2: Day
+        # Col 3: Day Type
+        # Col 4: Sales (IDR)
+        # Col 5: Mall Traffic
+        # Col 6: Sales / Visitor
+        headers = ["Date", "Day", "Day Type", "Sales (IDR)", "Mall Traffic", "Sales / Visitor"]
         for c, h in enumerate(headers, 1):
             cell = ws2.cell(row=2, column=c, value=h)
             _style_cell(cell, fill=HEADER_FILL, font=HEADER_FONT, align=HEADER_ALIGN)
 
-        _set_col_width(ws2, 1, 16)
-        _set_col_width(ws2, 2, 14)
-        _set_col_width(ws2, 3, 12)
-        _set_col_width(ws2, 4, 22)
-        _set_col_width(ws2, 5, 25)
+        _set_col_width(ws2, 1, 16)   # Date
+        _set_col_width(ws2, 2, 14)   # Day
+        _set_col_width(ws2, 3, 12)   # Day Type
+        _set_col_width(ws2, 4, 22)   # Sales (IDR)
+        _set_col_width(ws2, 5, 18)   # Mall Traffic
+        _set_col_width(ws2, 6, 18)   # Sales / Visitor
 
         # Daily rows
-        monthly_total = 0
-        source_files = ", ".join(tm.get("files", []))
+        monthly_total          = 0
+        monthly_traffic_total  = 0
 
         for i, d in enumerate(target_daily):
             row = 3 + i
@@ -2076,8 +2097,9 @@ def build_export_workbook(master_data, target_year, target_month, traffic_data=N
             except ValueError:
                 continue
 
-            day_name = dt.strftime("%A")
+            day_name   = dt.strftime("%A")
             is_weekend = dt.weekday() >= 5
+            sales_val  = d["sales"]
 
             if is_weekend:
                 fill = WEEKEND_FILL
@@ -2088,41 +2110,94 @@ def build_export_workbook(master_data, target_year, target_month, traffic_data=N
                 font = DATA_FONT
                 day_type = "Weekday"
 
+            # Col 1 — Date
             ws2.cell(row=row, column=1, value=dt)
             _style_cell(ws2.cell(row=row, column=1), fill=fill, font=font,
-                         align=Alignment(horizontal="center"), num_fmt="DD-MMM-YYYY")
+                        align=Alignment(horizontal="center"), num_fmt="DD-MMM-YYYY")
 
+            # Col 2 — Day name
             ws2.cell(row=row, column=2, value=day_name)
             _style_cell(ws2.cell(row=row, column=2), fill=fill, font=font,
-                         align=Alignment(horizontal="center"))
+                        align=Alignment(horizontal="center"))
 
+            # Col 3 — Day type
             ws2.cell(row=row, column=3, value=day_type)
             _style_cell(ws2.cell(row=row, column=3), fill=fill, font=font,
-                         align=Alignment(horizontal="center"))
+                        align=Alignment(horizontal="center"))
 
-            ws2.cell(row=row, column=4, value=d["sales"])
+            # Col 4 — Sales
+            ws2.cell(row=row, column=4, value=sales_val)
             _style_cell(ws2.cell(row=row, column=4), fill=fill, font=font,
-                         align=Alignment(horizontal="right"), num_fmt="#,##0")
+                        align=Alignment(horizontal="right"), num_fmt="#,##0")
 
-            ws2.cell(row=row, column=5, value=source_files)
-            _style_cell(ws2.cell(row=row, column=5), fill=fill,
-                         font=Font(color="94A3B8", size=9, name="Calibri"),
-                         align=Alignment(horizontal="left"))
+            # Col 5 — Mall Traffic
+            traffic_val = daily_traffic_lookup.get(d["date"])
+            if traffic_val is not None:
+                ws2.cell(row=row, column=5, value=traffic_val)
+                _style_cell(ws2.cell(row=row, column=5), fill=fill, font=font,
+                            align=Alignment(horizontal="right"), num_fmt="#,##0")
+                monthly_traffic_total += traffic_val
+            else:
+                # No traffic data for this date
+                ws2.cell(row=row, column=5, value="—")
+                _style_cell(ws2.cell(row=row, column=5), fill=fill,
+                            font=NO_DATA_FONT,
+                            align=Alignment(horizontal="center"))
 
-            monthly_total += d["sales"]
+            # Col 6 — Sales / Visitor
+            if traffic_val and traffic_val > 0:
+                spv = round(sales_val / traffic_val)
+                ws2.cell(row=row, column=6, value=spv)
+                _style_cell(ws2.cell(row=row, column=6), fill=fill, font=font,
+                            align=Alignment(horizontal="right"), num_fmt="#,##0")
+            else:
+                ws2.cell(row=row, column=6, value="—")
+                _style_cell(ws2.cell(row=row, column=6), fill=fill,
+                            font=NO_DATA_FONT,
+                            align=Alignment(horizontal="center"))
+
+            monthly_total += sales_val
 
         # Total row
         total_row = 3 + len(target_daily)
+
+        # Style all 6 cells in total row with grand fill first
+        for c in range(1, 7):
+            _style_cell(ws2.cell(row=total_row, column=c),
+                        fill=GRAND_FILL, font=GRAND_FONT)
+
+        # Col 3 — "TOTAL" label
         ws2.cell(row=total_row, column=3, value="TOTAL")
         _style_cell(ws2.cell(row=total_row, column=3), fill=GRAND_FILL, font=GRAND_FONT,
-                      align=Alignment(horizontal="center"))
+                    align=Alignment(horizontal="center"))
 
+        # Col 4 — Total sales
         ws2.cell(row=total_row, column=4, value=monthly_total)
         _style_cell(ws2.cell(row=total_row, column=4), fill=GRAND_FILL, font=GRAND_FONT,
-                      align=Alignment(horizontal="right"), num_fmt="#,##0")
+                    align=Alignment(horizontal="right"), num_fmt="#,##0")
 
-        for c in [1, 2, 5]:
-            _style_cell(ws2.cell(row=total_row, column=c), fill=GRAND_FILL, font=GRAND_FONT)
+        # Col 5 — Total traffic (only meaningful if traffic data exists)
+        if monthly_traffic_total > 0:
+            ws2.cell(row=total_row, column=5, value=monthly_traffic_total)
+            _style_cell(ws2.cell(row=total_row, column=5), fill=GRAND_FILL, font=GRAND_FONT,
+                        align=Alignment(horizontal="right"), num_fmt="#,##0")
+        else:
+            ws2.cell(row=total_row, column=5, value="—")
+            _style_cell(ws2.cell(row=total_row, column=5), fill=GRAND_FILL,
+                        font=Font(color="FFFFFF", bold=True, size=11, name="Calibri"),
+                        align=Alignment(horizontal="center"))
+
+        # Col 6 — Overall Sales / Visitor for the month
+        if monthly_traffic_total > 0:
+            overall_spv = round(monthly_total / monthly_traffic_total)
+            ws2.cell(row=total_row, column=6, value=overall_spv)
+            _style_cell(ws2.cell(row=total_row, column=6), fill=GRAND_FILL, font=GRAND_FONT,
+                        align=Alignment(horizontal="right"), num_fmt="#,##0")
+        else:
+            ws2.cell(row=total_row, column=6, value="—")
+            _style_cell(ws2.cell(row=total_row, column=6), fill=GRAND_FILL,
+                        font=Font(color="FFFFFF", bold=True, size=11, name="Calibri"),
+                        align=Alignment(horizontal="center"))
 
         ws2.freeze_panes = "A3"
 
