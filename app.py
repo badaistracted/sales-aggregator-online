@@ -325,12 +325,6 @@ def parse_month_year_cell(text):
         if mn and 2020 <= yr <= 2035:
             return (yr, mn)
 
-    # Datetime strings from pandas: "2026-03-01 00:00:00"
-    m = re.match(r"^(\d{4})-(\d{2})-\d{2}", s)
-    if m:
-        yr, mn = int(m.group(1)), int(m.group(2))
-        if 1 <= mn <= 12 and 2020 <= yr <= 2035:
-            return (yr, mn)
 
     return None
 
@@ -439,8 +433,8 @@ def _candidate_data_score(rows, header_idx, date_c, sales_c):
 
         checked += 1
 
-        dt = pd.to_datetime(str(dv).strip(), dayfirst=True, errors="coerce")
-        if not pd.isna(dt):
+        parsed_date = parse_date_cell(dv)
+        if parsed_date is not None:
             good_dates += 1
 
         if parse_number(sv) is not None:
@@ -604,10 +598,11 @@ def try_excel_columnar(rows):
         return None
 
     header_idx = best["header_idx"]
-    date_c     = best["date_c"]
-    sales_c    = best["sales_c"]
+    date_c = best["date_c"]
+    sales_c = best["sales_c"]
 
     daily = []
+
     for r in rows[header_idx + 1:]:
         if date_c >= len(r) or sales_c >= len(r):
             continue
@@ -616,13 +611,18 @@ def try_excel_columnar(rows):
         raw_sales = r[sales_c]
 
         parsed_date = parse_date_cell(raw_date)
-if parsed_date is None:
-    continue
+        if parsed_date is None:
+            continue
 
-daily.append({
-    "date": str(parsed_date),
-    "sales": s,
-})
+        s = parse_number(raw_sales)
+        if s is None:
+            continue
+
+        daily.append({
+            "date": str(parsed_date),
+            "sales": s,
+        })
+
     if not daily:
         return None
 
