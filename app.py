@@ -847,8 +847,8 @@ def try_traffic_parser(rows):
             )):
                 date_col = c
 
-            # Find TOTAL column
-            if norm == "total":
+              # Find 140% column (preferred traffic value)
+            if "140" in norm:
                 total_col = c
                 header_idx = idx
 
