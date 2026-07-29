@@ -2580,23 +2580,25 @@ def export():
             return jsonify({"error": "No data received"}), 400
 
         target_month = int(data.get("month", 1))
-        target_year = int(data.get("year", 2026))
-        master_data = data.get("master", {})
+        target_year  = int(data.get("year", 2026))
+        master_data  = data.get("master", {})
         traffic_data = data.get("traffic")
-        events_data  = data.get("events")        # ← NEW
+        events_data  = data.get("events")
 
-    if not master_data and not traffic_data:
-        return jsonify({"error": "No data to export"}), 400
+        if not master_data and not traffic_data:
+            return jsonify({"error": "No data to export"}), 400
 
-    wb = build_export_workbook(
-        master_data, target_year, target_month,
-        traffic_data=traffic_data,
-        events_data=events_data,             # ← NEW
-    )
+        wb = build_export_workbook(
+            master_data,
+            target_year,
+            target_month,
+            traffic_data=traffic_data,
+            events_data=events_data,
+        )
 
         month_name = cal.month_abbr[target_month]
-        filename = f"Tenant_Report_{month_name}_{target_year}.xlsx"
-        filepath = REPORTS_FOLDER / filename
+        filename   = f"Tenant_Report_{month_name}_{target_year}.xlsx"
+        filepath   = REPORTS_FOLDER / filename
 
         wb.save(filepath)
 
