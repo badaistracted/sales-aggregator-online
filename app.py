@@ -1044,7 +1044,7 @@ HTML_UI = r"""
     <div class="master" id="masterSection">
     <div class="config-card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-            <div class="config-title" style="margin-bottom:0">📊 Master Report — Unified Tenant Sales</div>
+            <div class="config-title" style="margin-bottom:0">📊 Master Report — Preview</div>
             <button class="browse-btn btn-folder" id="exportBtn" onclick="exportExcel()" style="margin:0">
                 ⬇️ Export to Excel
             </button>
