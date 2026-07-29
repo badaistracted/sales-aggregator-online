@@ -520,6 +520,42 @@ def try_excel_pivot(rows):
 
 # ─── Parser 2: Excel Columnar (Date | Sales columns) ──────────
 
+def parse_date_cell(raw):
+    """
+    Parse dates safely.
+    - If it looks like ISO format (YYYY-MM-DD), do NOT use dayfirst=True
+    - Only use dayfirst=True for ambiguous human-style dates like 01/05/2026
+    """
+    if raw is None:
+        return None
+
+    s = str(raw).strip()
+    if not s or s.lower() in ("nan", "none", "-", "--"):
+        return None
+
+    iso_formats = [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d",
+    ]
+    for fmt in iso_formats:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+
+    if re.match(r"^\d{4}[-/]", s):
+        dt = pd.to_datetime(s, errors="coerce", yearfirst=True)
+        if not pd.isna(dt):
+            return dt.date()
+
+    dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
+    if not pd.isna(dt):
+        return dt.date()
+
+    return None
+
 def try_excel_columnar(rows):
     """
     Detect a classic daily table with a true header row somewhere below title/logo rows.
@@ -579,19 +615,14 @@ def try_excel_columnar(rows):
         raw_date = str(r[date_c]).strip()
         raw_sales = r[sales_c]
 
-        dt = pd.to_datetime(raw_date, dayfirst=True, errors="coerce")
-        if pd.isna(dt):
-            continue
+        parsed_date = parse_date_cell(raw_date)
+if parsed_date is None:
+    continue
 
-        s = parse_number(raw_sales)
-        if s is None:
-            continue
-
-        daily.append({
-            "date": str(dt.date()),
-            "sales": s,
-        })
-
+daily.append({
+    "date": str(parsed_date),
+    "sales": s,
+})
     if not daily:
         return None
 
