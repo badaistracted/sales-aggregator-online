@@ -831,12 +831,12 @@ def try_traffic_parser(rows):
     1  | Kamis, 01 Januari 2026 | 16,428 | 9,056 | ...
     """
 
-    # Step 1: Find the header row with TOTAL column
+       # Step 1: Find the header row with 140% or TOTAL column
     header_idx = None
     total_col = None
     date_col = None
 
-        for idx, row in enumerate(rows[:20]):
+    for idx, row in enumerate(rows[:20]):
         found_140 = None
         found_total = None
         found_date = None
@@ -861,13 +861,12 @@ def try_traffic_parser(rows):
 
         # If we found either 140% or TOTAL on this row, it's the header
         if found_140 is not None or found_total is not None:
-            # Prefer 140% over TOTAL
             total_col = found_140 if found_140 is not None else found_total
             header_idx = idx
             if found_date is not None:
                 date_col = found_date
             break
-            
+
     if header_idx is None or total_col is None:
         return None
 
