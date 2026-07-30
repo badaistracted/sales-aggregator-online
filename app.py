@@ -2518,7 +2518,7 @@ def upload():
             "parsed": None,
         }
 
-                if ext in [".xlsx", ".xls"]:
+        if ext in [".xlsx", ".xls"]:
             # ── Try event calendar first (multi-sheet) ──────
             event_result = parse_event_file(filepath)
             if event_result and event_result.get("success"):
