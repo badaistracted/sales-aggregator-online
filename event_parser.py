@@ -153,9 +153,9 @@ def try_event_parser(rows, filename=""):
     Returns:
         dict with success, daily, monthly, events_flat, is_events flag
     """
-    # ── Step 1: Find the PERIODE row and header row ─────────────
+    # ── Step 1: Find the PERIODE row and the "Date" header row ──
     year_hint = None
-    header_row_idx = None
+    date_header_idx = None
 
     for idx, row in enumerate(rows[:30]):
         row_text = " ".join(str(c) for c in row).lower()
@@ -167,34 +167,49 @@ def try_event_parser(rows, filename=""):
                     break
 
         normed = [_normalize_header(c) for c in row]
-        # Header contains "date" AND at least one location keyword
+        # The row that contains "date" (or "tanggal") is our anchor
         if any("date" in n or "tanggal" in n for n in normed):
-            if any(loc in n for loc in LOCATION_KEYS for n in normed):
-                header_row_idx = idx
-                break
+            if date_header_idx is None:
+                date_header_idx = idx
 
-    if header_row_idx is None:
+    if date_header_idx is None:
         return None
 
     if year_hint is None:
         year_hint = 2026
 
-    header_normed = [_normalize_header(c) for c in rows[header_row_idx]]
-
     # ── Step 2: Map columns ──────────────────────────────────────
+    # Locations may be on the SAME row as "Date" OR the NEXT row
+    # (split two-row header). Scan both rows for location keywords.
+    row_a = [_normalize_header(c) for c in rows[date_header_idx]]
+    row_b = (
+        [_normalize_header(c) for c in rows[date_header_idx + 1]]
+        if date_header_idx + 1 < len(rows)
+        else []
+    )
+
     col_map = {}  # location_name -> column index
     for name in LOCATION_KEYS:
-        for c_idx, h in enumerate(header_normed):
+        # Check row A first
+        found = False
+        for c_idx, h in enumerate(row_a):
             if name in h:
                 col_map[name] = c_idx
+                found = True
                 break
+        # Then check row B
+        if not found:
+            for c_idx, h in enumerate(row_b):
+                if name in h:
+                    col_map[name] = c_idx
+                    break
 
+    # Date / category / status are on row A
     date_col = None
     category_col = None
     status_col = None
-
-    for c_idx, h in enumerate(header_normed):
-        if "date" in h or "tanggal" in h:
+    for c_idx, h in enumerate(row_a):
+        if ("date" in h or "tanggal" in h) and date_col is None:
             date_col = c_idx
         elif "categor" in h:
             category_col = c_idx
@@ -206,6 +221,15 @@ def try_event_parser(rows, filename=""):
 
     if not col_map:
         return None  # No location columns found — probably not an event file
+
+    # Data starts after whichever header row is lower.
+    # If locations were on row B, data begins at date_header_idx + 2.
+    locations_on_row_b = any(
+        col_map[name] < len(row_b) and name in row_b[col_map[name]]
+        for name in col_map
+        if col_map[name] < len(row_b)
+    )
+    header_row_idx = date_header_idx + 1 if locations_on_row_b else date_header_idx
 
     # ── Step 3: Extract events row by row ───────────────────────
     events_flat = []
