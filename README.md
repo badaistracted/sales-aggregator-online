@@ -1,24 +1,23 @@
-# 🏬 Mall Monthly Report Automation
+#  Mall Monthly Report Automation
 
 Automated monthly reporting system that parses tenant sales, visitor traffic, and event calendar data into a unified Excel report — with PowerPoint generation powered by AI commentary.
 
-## 🎯 What It Does
+##  What It Does
 
-Upload your mall's raw data files → get a polished management report.
-📁 Upload Files (Sales + Traffic + Events)
+Upload mall's raw data files → get a polished management report.
+ Upload Files (Sales + Traffic + Events)
 ↓
-🔍 Auto-detect file type & parse
+ Auto-detect file type & parse
 ↓
-📊 Unified Master Report (web preview)
+ Unified Master Report (web preview)
 ↓
-📥 Export Excel (.xlsx) — formatted, multi-tab
+ Export Excel (.xlsx) — formatted, multi-tab
 ↓
-📊 Export PowerPoint (.pptx) — charts + AI commentary
-
-text
+ Export PowerPoint (.pptx) — charts + AI commentary
 
 
-## 📂 Data Sources
+
+## Data Sources
 
 ### 1. Sales Data
 - **Format:** `.xlsx`, `.xls`, or `.pdf`
@@ -45,7 +44,7 @@ text
   - `PERIODE:` header rows
   - Filled or empty TIME columns
 
-## 🏗️ Architecture
+## Architecture
 project/
 ├── app.py # Flask server, parsers, Excel export, routes
 ├── event_parser.py # Event calendar parser (multi-sheet)
@@ -58,19 +57,9 @@ project/
 ├── temp_uploads/ # (auto-created) temporary file storage
 └── generated_reports/ # (auto-created) exported reports
 
-text
 
 
-### Design Principles
-
-| Principle | Implementation |
-|---|---|
-| **Deterministic** | Python calculates all numbers, charts, and KPIs |
-| **AI for commentary only** | LLM writes executive summary & recommendations — never calculates |
-| **Graceful fallback** | No OpenAI key? Template text is used automatically |
-| **Simple pipeline** | Upload → Parse → Preview → Export. No database, no dashboard |
-
-## 📊 Excel Export
+## Excel Export
 
 Multi-tab workbook with professional formatting:
 
@@ -88,7 +77,7 @@ Multi-tab workbook with professional formatting:
 - Freeze panes on all sheets
 - IDR number formatting (`#,##0`)
 
-## 📊 PowerPoint Export
+## PowerPoint Export
 
 7-slide management presentation:
 
@@ -109,13 +98,7 @@ Multi-tab workbook with professional formatting:
 - Traffic + Sales/Visitor dual-axis (bar + line)
 - Daily sales line with weekend shading, peak annotation, 7-day moving average
 
-### AI Commentary (OpenAI)
-- Model: `gpt-4o-mini` (fast, cheap)
-- Temperature: `0.4` (consistent, factual)
-- Structured JSON output
-- Falls back to template text if no API key
-
-## 🔍 Parser Details
+##  Parser Details
 
 ### Sales Parser Pipeline
 try_event_parser() → fingerprint check (Main Atrium etc.)
@@ -128,7 +111,6 @@ try_excel_pivot() → month headers as columns
 ↓ (no pivot found)
 try_pdf_daily() → OCR/text line parsing
 
-text
 
 
 ### Event Parser Pipeline
@@ -150,7 +132,6 @@ deduplicate
 ↓
 merge all sheets → unified event dataset
 
-text
 
 
 ### Month Validation
@@ -165,20 +146,15 @@ text
 - Handles plain numbers: `5000000`
 - Handles decimals: `1,234.56`
 
-📁 Supported File Formats
+Supported File Formats
 Format	Sales	Traffic	Events
-.xlsx	✅	✅	✅
-.xls	✅	✅	✅
-.pdf (digital)	✅	❌	❌
-.pdf (scanned/OCR)	✅	❌	❌
-🛡️ Error Handling
+.xlsx
+.xls
+.pdf (digital)
+.pdf (scanned/OCR)
+Error Handling
 - Files that fail to parse are listed with warnings — never crash the whole upload
 - Month mismatches are flagged but files are still processed
 - Missing traffic or events data → those sections simply omitted from exports
 - LLM failure → automatic template fallback, report still generates
 - Temporary upload files are cleaned up after processing
-📝 Notes
-- Not a KPI dashboard — this is a report generation tool
-- Main output is Excel + PowerPoint — the web UI is for preview and validation
-AI is optional — the system is fully functional without an OpenAI key
-Calculations are deterministic — Python does all math, AI only writes text
