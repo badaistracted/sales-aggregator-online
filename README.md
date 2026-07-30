@@ -172,13 +172,13 @@ Format	Sales	Traffic	Events
 .pdf (digital)	✅	❌	❌
 .pdf (scanned/OCR)	✅	❌	❌
 🛡️ Error Handling
-Files that fail to parse are listed with warnings — never crash the whole upload
-Month mismatches are flagged but files are still processed
-Missing traffic or events data → those sections simply omitted from exports
-LLM failure → automatic template fallback, report still generates
-Temporary upload files are cleaned up after processing
+- Files that fail to parse are listed with warnings — never crash the whole upload
+- Month mismatches are flagged but files are still processed
+- Missing traffic or events data → those sections simply omitted from exports
+- LLM failure → automatic template fallback, report still generates
+- Temporary upload files are cleaned up after processing
 📝 Notes
-Not a KPI dashboard — this is a report generation tool
-Main output is Excel + PowerPoint — the web UI is for preview and validation
+- Not a KPI dashboard — this is a report generation tool
+- Main output is Excel + PowerPoint — the web UI is for preview and validation
 AI is optional — the system is fully functional without an OpenAI key
 Calculations are deterministic — Python does all math, AI only writes text
