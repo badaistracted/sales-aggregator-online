@@ -2,28 +2,20 @@
 """
 Parser for the mall's internal event calendar Excel file.
 
-Input format:
-  - Row with "PERIODE:" that indicates the month
-  - Header row: Date | Time | Main Atrium | Amphitheatre | Foodtainment | Other | Category | Status
-  - Dates can span multiple rows (merged cells in Excel -> empty cells in pandas)
-  - Events are filled under location columns
-
-Output:
-  {
-    "success": True/False,
-    "daily": [...],           # Solution 1 format — list of {date, events: [...]}
-    "monthly": {...},         # Solution 1 format — grouped by month
-    "events_flat": [...],     # Flat list for easy lookup
-    "is_events": True,        # Flag so app.py knows this is events data
-    "message": "..."
-  }
+Handles:
+  - Multiple sheets (one per month)
+  - Split two-row headers (Date on row A, locations on row B)
+  - Merged date cells (dates spanning multiple rows)
+  - Indonesian date formats (DD/MM/YYYY, day-first)
+  - Pandas auto-converted datetime objects
 """
 import re
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
+from collections import defaultdict
 
-# Known month names for parsing the PERIODE header
+# Known month names
 MONTH_MAP = {
     "jan": 1, "januari": 1, "january": 1,
     "feb": 2, "februari": 2, "february": 2,
@@ -39,7 +31,6 @@ MONTH_MAP = {
     "des": 12, "desember": 12, "december": 12,
 }
 
-# Location columns we expect to find — ordered by likelihood
 LOCATION_KEYS = [
     "main atrium",
     "amphitheatre",
@@ -49,37 +40,36 @@ LOCATION_KEYS = [
 
 
 def _clean_event_text(text):
-    """Strip whitespace, newlines, and quotes from event text."""
     if text is None:
         return None
+    # Don't process date/datetime objects as event text
+    if isinstance(text, (date, datetime)):
+        return None
     s = str(text).strip()
-    # Remove Excel-style wrapping quotes
     s = s.strip('"').strip("'")
-    # Collapse multiple spaces and newlines into single space
     s = re.sub(r"\s+", " ", s)
-    # Skip rows that are empty or just noise
     if s.lower() in ("", "nan", "none", "by eo"):
         return None
-    # Skip rows that are only "by EO" variants
     if re.fullmatch(r"by\s+eo\b", s, re.IGNORECASE):
         return None
     return s
 
 
 def _normalize_header(val):
-    """Lowercase, strip, collapse spaces."""
+    if isinstance(val, (date, datetime)):
+        return ""  # Don't treat dates as header text
     return re.sub(r"\s+", " ", str(val).strip().lower())
 
 
 def _parse_date(val, year_hint=2026):
-    """Parse date from Excel cell. Can be datetime, string, or float."""
     if val is None:
         return None
 
-    # Already a date/datetime object
-    if isinstance(val, (date, datetime)):
-        d = val if isinstance(val, date) else val.date()
-        return d
+    # Already a date/datetime object (pandas auto-converts Excel dates)
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
 
     # pandas Timestamp
     if hasattr(val, "date") and callable(val.date):
@@ -89,13 +79,18 @@ def _parse_date(val, year_hint=2026):
             pass
 
     s = str(val).strip()
-
     if not s or s.lower() in ("nan", "none", ""):
         return None
 
-    # Try "DD/MM/YYYY" or "DD-MM-YYYY" or "YYYY-MM-DD"
-    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%Y/%m/%d",
-                 "%d/%m/%y", "%d-%m-%y"]:
+    # "2026-05-01 00:00:00" or "2026-05-01" (from pandas str conversion)
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+
+    # DD/MM/YYYY (Indonesian convention, day first)
+    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -104,32 +99,41 @@ def _parse_date(val, year_hint=2026):
     # Excel serial number (float like 46169.0)
     try:
         f = float(s)
-        from datetime import timedelta
-        base = date(1899, 12, 30)
-        return base + timedelta(days=int(f))
+        if 40000 < f < 60000:
+            base = date(1899, 12, 30)
+            return base + timedelta(days=int(f))
     except (ValueError, OverflowError):
         pass
 
-    # "1/5/2026" without leading zeros — manual parse
+    # Manual regex for "1/5/2026" without leading zeros
     m = re.match(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", s)
     if m:
-        day = int(m.group(1))
-        month = int(m.group(2))
+        a = int(m.group(1))
+        b = int(m.group(2))
         year = int(m.group(3))
         if year < 100:
             year += 2000
-        if 1 <= day <= 31 and 1 <= month <= 12 and 2020 <= year <= 2035:
-            try:
-                return date(year, month, day)
-            except ValueError:
-                pass
+        if 2020 <= year <= 2035:
+            # Day/month/year first (Indonesian)
+            if 1 <= a <= 31 and 1 <= b <= 12:
+                try:
+                    return date(year, b, a)
+                except ValueError:
+                    pass
+            # Fallback month/day/year
+            if 1 <= a <= 12 and 1 <= b <= 31:
+                try:
+                    return date(year, a, b)
+                except ValueError:
+                    pass
 
     return None
 
 
-def _parse_periode(periode_text):
-    """Extract (year, month) from 'MEI 2026'."""
-    s = str(periode_text).strip().lower()
+def _parse_periode(text):
+    if isinstance(text, (date, datetime)):
+        return None, None
+    s = str(text).strip().lower()
     m = re.match(r"([a-z]+)\s+(\d{4})", s)
     if m:
         month_name = m.group(1)
@@ -142,23 +146,21 @@ def _parse_periode(periode_text):
 
 def try_event_parser(rows, filename=""):
     """
-    Attempt to parse rows as a mall event calendar.
-
-    Called from app.py's parse_report dispatcher alongside other parsers.
-
-    Args:
-        rows: list of lists from Excel read
-        filename: original filename (unused, but kept for interface consistency)
-
-    Returns:
-        dict with success, daily, monthly, events_flat, is_events flag
+    Parse a SINGLE sheet's rows as event calendar.
+    Handles split two-row headers.
     """
-    # ── Step 1: Find the PERIODE row and the "Date" header row ──
+    # ── Step 1: Find PERIODE row and "Date" header row ──────────
     year_hint = None
     date_header_idx = None
 
     for idx, row in enumerate(rows[:30]):
-        row_text = " ".join(str(c) for c in row).lower()
+        # Check for PERIODE
+        row_text_parts = []
+        for c in row:
+            if not isinstance(c, (date, datetime)):
+                row_text_parts.append(str(c))
+        row_text = " ".join(row_text_parts).lower()
+
         if "periode" in row_text:
             for cell in row:
                 parsed = _parse_periode(cell)
@@ -166,8 +168,12 @@ def try_event_parser(rows, filename=""):
                     year_hint = parsed[0]
                     break
 
+        # Skip rows that have actual datetime values (data rows)
+        has_datetime = any(isinstance(c, (date, datetime)) for c in row)
+        if has_datetime:
+            continue
+
         normed = [_normalize_header(c) for c in row]
-        # The row that contains "date" (or "tanggal") is our anchor
         if any("date" in n or "tanggal" in n for n in normed):
             if date_header_idx is None:
                 date_header_idx = idx
@@ -178,9 +184,7 @@ def try_event_parser(rows, filename=""):
     if year_hint is None:
         year_hint = 2026
 
-    # ── Step 2: Map columns ──────────────────────────────────────
-    # Locations may be on the SAME row as "Date" OR the NEXT row
-    # (split two-row header). Scan both rows for location keywords.
+    # ── Step 2: Map columns (check row A and row B) ─────────────
     row_a = [_normalize_header(c) for c in rows[date_header_idx]]
     row_b = (
         [_normalize_header(c) for c in rows[date_header_idx + 1]]
@@ -188,23 +192,21 @@ def try_event_parser(rows, filename=""):
         else []
     )
 
-    col_map = {}  # location_name -> column index
+    col_map = {}
     for name in LOCATION_KEYS:
-        # Check row A first
         found = False
         for c_idx, h in enumerate(row_a):
             if name in h:
                 col_map[name] = c_idx
                 found = True
                 break
-        # Then check row B
         if not found:
             for c_idx, h in enumerate(row_b):
                 if name in h:
                     col_map[name] = c_idx
                     break
 
-    # Date / category / status are on row A
+    # Date / category / status from row A
     date_col = None
     category_col = None
     status_col = None
@@ -218,14 +220,12 @@ def try_event_parser(rows, filename=""):
 
     if date_col is None:
         return None
-
     if not col_map:
-        return None  # No location columns found — probably not an event file
+        return None
 
-    # Data starts after whichever header row is lower.
-    # If locations were on row B, data begins at date_header_idx + 2.
+    # Figure out where data starts
     locations_on_row_b = any(
-        col_map[name] < len(row_b) and name in row_b[col_map[name]]
+        name in row_b[col_map[name]]
         for name in col_map
         if col_map[name] < len(row_b)
     )
@@ -258,13 +258,17 @@ def try_event_parser(rows, filename=""):
             cat = ""
             sts = ""
             if category_col is not None and category_col < len(row):
-                cat_raw = str(row[category_col]).strip()
-                if cat_raw.lower() not in ("nan", "none", ""):
-                    cat = cat_raw
+                cat_raw = row[category_col]
+                if not isinstance(cat_raw, (date, datetime)):
+                    cat_raw = str(cat_raw).strip()
+                    if cat_raw.lower() not in ("nan", "none", ""):
+                        cat = cat_raw
             if status_col is not None and status_col < len(row):
-                sts_raw = str(row[status_col]).strip()
-                if sts_raw.lower() not in ("nan", "none", ""):
-                    sts = sts_raw
+                sts_raw = row[status_col]
+                if not isinstance(sts_raw, (date, datetime)):
+                    sts_raw = str(sts_raw).strip()
+                    if sts_raw.lower() not in ("nan", "none", ""):
+                        sts = sts_raw
 
             events_flat.append({
                 "date": date_str,
@@ -275,7 +279,7 @@ def try_event_parser(rows, filename=""):
             })
 
     if len(events_flat) < 2:
-        return None  # Too few events — probably not a real event file
+        return None
 
     # ── Step 4: Deduplicate ──────────────────────────────────────
     seen = set()
@@ -285,12 +289,9 @@ def try_event_parser(rows, filename=""):
         if key not in seen:
             seen.add(key)
             unique.append(e)
-
     unique.sort(key=lambda e: e["date"])
 
-    # ── Step 5: Build Solution 1 format ──────────────────────────
-    # daily: [{"date": "2026-05-01", "events": ["Event A", "Event B"]}, ...]
-    from collections import defaultdict
+    # ── Step 5: Build output format ──────────────────────────────
     daily_map = defaultdict(list)
     for e in unique:
         daily_map[e["date"]].append(e["event_name"])
@@ -304,10 +305,9 @@ def try_event_parser(rows, filename=""):
         for d, evts in sorted(daily_map.items())
     ]
 
-    # monthly: {"2026-05": [list of events for that month], ...}
     monthly_map = defaultdict(list)
     for e in unique:
-        key = e["date"][:7]  # "2026-05"
+        key = e["date"][:7]
         monthly_map[key].append(e)
 
     monthly = {
@@ -319,7 +319,6 @@ def try_event_parser(rows, filename=""):
         for k, v in monthly_map.items()
     }
 
-    # ── Step 6: Build message ─────────────────────────────────────
     event_dates = sorted(daily_map.keys())
 
     return {
@@ -335,65 +334,60 @@ def try_event_parser(rows, filename=""):
             if event_dates else "No events found."
         ),
     }
-  
+
+
+# ── Multi-sheet reader ────────────────────────────────────────
+
 def parse_event_file(filepath):
     """
     Read an event calendar Excel file with multiple tabs (one per month).
     Tries every sheet and merges all events together.
-    
-    Called directly from app.py when we detect an event file,
-    BEFORE the normal read_excel → parse_report flow.
     """
     filepath = Path(filepath)
-    
+
     try:
         engine = "xlrd" if filepath.suffix == ".xls" else "openpyxl"
         xl = pd.ExcelFile(filepath, engine=engine)
         sheet_names = xl.sheet_names
-    except Exception as e:
+    except Exception:
         return None
-    
+
     all_events_flat = []
-    all_daily_map = {}
-    all_monthly = {}
     messages = []
-    
+
     for sheet_name in sheet_names:
         try:
             df = pd.read_excel(xl, sheet_name=sheet_name, header=None).fillna("")
             rows = []
             for row in df.values.tolist():
-                rows.append([str(c) if str(c) != "" else "" for c in row])
+                converted = []
+                for c in row:
+                    # Keep date/datetime objects as-is for _parse_date
+                    if isinstance(c, (date, datetime)):
+                        converted.append(c)
+                    elif hasattr(c, "date") and callable(c.date):
+                        # pandas Timestamp — convert to python datetime
+                        try:
+                            converted.append(c.to_pydatetime())
+                        except Exception:
+                            converted.append(str(c) if str(c) != "" else "")
+                    else:
+                        converted.append(str(c) if str(c) != "" else "")
+                rows.append(converted)
         except Exception:
             continue
-        
+
         if not rows:
             continue
-        
+
         result = try_event_parser(rows, sheet_name)
         if result and result.get("success"):
             all_events_flat.extend(result.get("events_flat", []))
-            
-            for d in result.get("daily", []):
-                date_str = d["date"]
-                if date_str not in all_daily_map:
-                    all_daily_map[date_str] = []
-                all_daily_map[date_str].extend(d.get("events", []))
-            
-            for mk, mv in result.get("monthly", {}).items():
-                if mk not in all_monthly:
-                    all_monthly[mk] = {"events": [], "event_count": 0, "event_days": 0}
-                all_monthly[mk]["events"].extend(mv.get("events", []))
-                all_monthly[mk]["event_count"] += mv.get("event_count", 0)
-                all_monthly[mk]["event_days"] = len(set(
-                    e["date"] for e in all_monthly[mk]["events"]
-                ))
-            
             messages.append(f"Sheet '{sheet_name}': {result['message']}")
-    
+
     if not all_events_flat:
         return None
-    
+
     # Deduplicate
     seen = set()
     unique_flat = []
@@ -403,13 +397,12 @@ def parse_event_file(filepath):
             seen.add(key)
             unique_flat.append(e)
     unique_flat.sort(key=lambda e: e["date"])
-    
-    # Rebuild daily from deduplicated
-    from collections import defaultdict
+
+    # Build daily
     daily_map = defaultdict(list)
     for e in unique_flat:
         daily_map[e["date"]].append(e["event_name"])
-    
+
     daily = [
         {
             "date": d,
@@ -418,13 +411,13 @@ def parse_event_file(filepath):
         }
         for d, evts in sorted(daily_map.items())
     ]
-    
-    # Rebuild monthly from deduplicated
+
+    # Build monthly
     monthly_map = defaultdict(list)
     for e in unique_flat:
         key = e["date"][:7]
         monthly_map[key].append(e)
-    
+
     monthly = {
         k: {
             "events": v,
@@ -433,9 +426,9 @@ def parse_event_file(filepath):
         }
         for k, v in monthly_map.items()
     }
-    
+
     months_found = sorted(monthly.keys())
-    
+
     return {
         "success": True,
         "format": "events",
