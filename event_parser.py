@@ -311,3 +311,117 @@ def try_event_parser(rows, filename=""):
             if event_dates else "No events found."
         ),
     }
+  
+def parse_event_file(filepath):
+    """
+    Read an event calendar Excel file with multiple tabs (one per month).
+    Tries every sheet and merges all events together.
+    
+    Called directly from app.py when we detect an event file,
+    BEFORE the normal read_excel → parse_report flow.
+    """
+    filepath = Path(filepath)
+    
+    try:
+        engine = "xlrd" if filepath.suffix == ".xls" else "openpyxl"
+        xl = pd.ExcelFile(filepath, engine=engine)
+        sheet_names = xl.sheet_names
+    except Exception as e:
+        return None
+    
+    all_events_flat = []
+    all_daily_map = {}
+    all_monthly = {}
+    messages = []
+    
+    for sheet_name in sheet_names:
+        try:
+            df = pd.read_excel(xl, sheet_name=sheet_name, header=None).fillna("")
+            rows = []
+            for row in df.values.tolist():
+                rows.append([str(c) if str(c) != "" else "" for c in row])
+        except Exception:
+            continue
+        
+        if not rows:
+            continue
+        
+        result = try_event_parser(rows, sheet_name)
+        if result and result.get("success"):
+            all_events_flat.extend(result.get("events_flat", []))
+            
+            for d in result.get("daily", []):
+                date_str = d["date"]
+                if date_str not in all_daily_map:
+                    all_daily_map[date_str] = []
+                all_daily_map[date_str].extend(d.get("events", []))
+            
+            for mk, mv in result.get("monthly", {}).items():
+                if mk not in all_monthly:
+                    all_monthly[mk] = {"events": [], "event_count": 0, "event_days": 0}
+                all_monthly[mk]["events"].extend(mv.get("events", []))
+                all_monthly[mk]["event_count"] += mv.get("event_count", 0)
+                all_monthly[mk]["event_days"] = len(set(
+                    e["date"] for e in all_monthly[mk]["events"]
+                ))
+            
+            messages.append(f"Sheet '{sheet_name}': {result['message']}")
+    
+    if not all_events_flat:
+        return None
+    
+    # Deduplicate
+    seen = set()
+    unique_flat = []
+    for e in all_events_flat:
+        key = (e["date"], e["event_name"], e["location"])
+        if key not in seen:
+            seen.add(key)
+            unique_flat.append(e)
+    unique_flat.sort(key=lambda e: e["date"])
+    
+    # Rebuild daily from deduplicated
+    from collections import defaultdict
+    daily_map = defaultdict(list)
+    for e in unique_flat:
+        daily_map[e["date"]].append(e["event_name"])
+    
+    daily = [
+        {
+            "date": d,
+            "events": list(set(evts)),
+            "event_count": len(set(evts)),
+        }
+        for d, evts in sorted(daily_map.items())
+    ]
+    
+    # Rebuild monthly from deduplicated
+    monthly_map = defaultdict(list)
+    for e in unique_flat:
+        key = e["date"][:7]
+        monthly_map[key].append(e)
+    
+    monthly = {
+        k: {
+            "events": v,
+            "event_count": len(v),
+            "event_days": len(set(e["date"] for e in v)),
+        }
+        for k, v in monthly_map.items()
+    }
+    
+    months_found = sorted(monthly.keys())
+    
+    return {
+        "success": True,
+        "format": "events",
+        "is_events": True,
+        "daily": daily,
+        "monthly": monthly,
+        "events_flat": unique_flat,
+        "message": (
+            f"Event calendar: {len(unique_flat)} event(s) across "
+            f"{len(months_found)} month(s) from {len(messages)} sheet(s). "
+            f"Months: {', '.join(months_found)}"
+        ),
+    }
