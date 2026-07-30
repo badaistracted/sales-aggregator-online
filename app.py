@@ -2410,9 +2410,16 @@ def build_export_workbook(master_data, target_year, target_month,
         ws_evt.freeze_panes = "A3"
 
         # ── Add EVENTS column (G) to each tenant daily sheet ──
+        # Build date -> events lookup, normalizing date format
         events_by_date = {}
         for evt in events_data.get("events_flat", []):
             d = evt["date"]
+            # Normalize to YYYY-MM-DD with zero padding
+            try:
+                dt = datetime.strptime(d, "%Y-%m-%d").date()
+                d = str(dt)  # guaranteed "2026-05-01" format
+            except ValueError:
+                pass
             if d not in events_by_date:
                 events_by_date[d] = []
             events_by_date[d].append(evt["event_name"])
@@ -2443,9 +2450,16 @@ def build_export_workbook(master_data, target_year, target_month,
             _set_col_width(ws_tenant, 7, 45)
 
             # Fill events for each daily row
+            # Fill events for each daily row
             for i, d in enumerate(target_daily):
                 row = 3 + i
                 date_str = d["date"]
+                # Normalize sales date to match events lookup
+                try:
+                    dt_norm = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    date_str = str(dt_norm)
+                except ValueError:
+                    pass
                 event_text = events_lookup.get(date_str, "-")
 
                 try:
@@ -2522,19 +2536,49 @@ def upload():
             # ── Try event calendar first (multi-sheet) ──────
             event_result = parse_event_file(filepath)
             if event_result and event_result.get("success"):
-                # Event file detected — skip normal parsing
-                data = read_excel(filepath)  # still read for preview
+                # Event file detected — show confirmation text, not raw table
+                event_count = len(event_result.get("events_flat", []))
+                months_found = sorted(event_result.get("monthly", {}).keys())
                 
-                if data["type"] == "error":
-                    # If preview read fails, make a minimal preview
-                    entry["data_type"] = "text"
-                    entry["data_lines"] = [event_result["message"]]
-                    entry["total_rows"] = len(event_result.get("events_flat", []))
-                else:
-                    entry["data_type"] = "table"
-                    entry["data_rows"] = data.get("rows", [])
-                    entry["data_cols"] = data.get("cols", 0)
-                    entry["total_rows"] = len(data.get("rows", []))
+                # Build a simple confirmation preview
+                preview_lines = [
+                    "✅ EVENT CALENDAR DETECTED",
+                    "",
+                    f"Total events: {event_count}",
+                    f"Months covered: {', '.join(months_found)}",
+                    "",
+                ]
+                
+                # Show event count per month
+                for mk in months_found:
+                    mv = event_result["monthly"][mk]
+                    parts = mk.split("-")
+                    label = f"{cal.month_name[int(parts[1])]} {parts[0]}"
+                    preview_lines.append(
+                        f"  {label}: {mv['event_count']} event(s) across {mv['event_days']} day(s)"
+                    )
+                
+                preview_lines.append("")
+                preview_lines.append("─" * 50)
+                preview_lines.append("")
+                
+                # Show sample events (first 15)
+                preview_lines.append("Sample events:")
+                seen_events = set()
+                for evt in event_result.get("events_flat", [])[:30]:
+                    name = evt["event_name"]
+                    if name not in seen_events:
+                        seen_events.add(name)
+                        preview_lines.append(f"  📅 {evt['date']}  |  {evt['location']}  |  {name}")
+                    if len(seen_events) >= 15:
+                        remaining = event_count - 15
+                        if remaining > 0:
+                            preview_lines.append(f"  ... and {remaining} more events")
+                        break
+                
+                entry["data_type"]  = "text"
+                entry["data_lines"] = preview_lines
+                entry["total_rows"] = event_count
                 
                 entry["success"] = True
                 entry["parsed"] = event_result
