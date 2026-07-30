@@ -2409,8 +2409,7 @@ def build_export_workbook(master_data, target_year, target_month,
 
         ws_evt.freeze_panes = "A3"
 
-        # Also add EVENTS column to each tenant daily sheet
-        # Build date -> events lookup string
+        # ── Add EVENTS column (G) to each tenant daily sheet ──
         events_by_date = {}
         for evt in events_data.get("events_flat", []):
             d = evt["date"]
@@ -2423,9 +2422,6 @@ def build_export_workbook(master_data, target_year, target_month,
             for d, names in events_by_date.items()
         }
 
-        # Now go through each tenant sheet and add a 7th column
-        # We need to re-open the sheets we already created
-        # We already have tenant_names list — iterate and find their sheets
         for tenant in tenant_names:
             tm = master_data[tenant]
             daily = tm.get("daily", [])
@@ -2468,14 +2464,17 @@ def build_export_workbook(master_data, target_year, target_month,
                     align=Alignment(horizontal="left", wrap_text=True),
                 )
 
-            # Total row — blank or "—"
+            # Total row
             total_row = 3 + len(target_daily)
             ws_tenant.cell(row=total_row, column=7, value="—")
             _style_cell(ws_tenant.cell(row=total_row, column=7),
                         fill=GRAND_FILL, font=GRAND_FONT,
                         align=Alignment(horizontal="center"))
 
-        return wb
+    # ══════════════════════════════════════════════════════════
+    #  THIS MUST BE OUTSIDE ALL IF BLOCKS — always return wb
+    # ══════════════════════════════════════════════════════════
+    return wb
 
 # ══════════════════════════════════════════════════════════════
 #  ROUTES
