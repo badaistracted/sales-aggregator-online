@@ -12,7 +12,7 @@ from werkzeug.utils import secure_filename
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
-from event_parser import try_event_parser
+from event_parser import try_event_parser, parse_event_file
 from chart_builder import (
     chart_monthly_sales,
     chart_top_tenants,
@@ -2518,7 +2518,45 @@ def upload():
             "parsed": None,
         }
 
-        if ext in [".xlsx", ".xls"]:
+                if ext in [".xlsx", ".xls"]:
+            # ── Try event calendar first (multi-sheet) ──────
+            event_result = parse_event_file(filepath)
+            if event_result and event_result.get("success"):
+                # Event file detected — skip normal parsing
+                data = read_excel(filepath)  # still read for preview
+                
+                if data["type"] == "error":
+                    # If preview read fails, make a minimal preview
+                    entry["data_type"] = "text"
+                    entry["data_lines"] = [event_result["message"]]
+                    entry["total_rows"] = len(event_result.get("events_flat", []))
+                else:
+                    entry["data_type"] = "table"
+                    entry["data_rows"] = data.get("rows", [])
+                    entry["data_cols"] = data.get("cols", 0)
+                    entry["total_rows"] = len(data.get("rows", []))
+                
+                entry["success"] = True
+                entry["parsed"] = event_result
+                
+                # Month check from events dates
+                detected = set()
+                for evt in event_result.get("events_flat", []):
+                    try:
+                        parts = evt["date"].split("-")
+                        yr, mn = int(parts[0]), int(parts[1])
+                        detected.add((yr, mn))
+                    except (ValueError, IndexError):
+                        pass
+                detected.update(detect_months_in_text(f.filename))
+                entry["month_check"] = validate_month(detected, target_year, target_month)
+                
+                results.append(entry)
+                if filepath.exists():
+                    os.remove(filepath)
+                continue  # skip the rest of the loop for this file
+            
+            # ── Normal Excel reading ────────────────────────
             data = read_excel(filepath)
         elif ext == ".pdf":
             data = read_pdf(filepath)
