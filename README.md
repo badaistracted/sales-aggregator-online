@@ -1,64 +1,247 @@
-# Tenant Sales Aggregator
+# 🏬 Mall Monthly Report Automation
 
-A local web app that aggregates daily sales from multiple tenant Excel files,
-applies Indonesian calendar logic (weekends + national holidays), and produces
-a formatted multi-tab Excel report plus an in-browser dashboard.
+Automated monthly reporting system that parses tenant sales, visitor traffic, and event calendar data into a unified Excel report — with PowerPoint generation powered by AI commentary.
 
-## Setup
+## 🎯 What It Does
+
+Upload your mall's raw data files → get a polished management report.
+📁 Upload Files (Sales + Traffic + Events)
+↓
+🔍 Auto-detect file type & parse
+↓
+📊 Unified Master Report (web preview)
+↓
+📥 Export Excel (.xlsx) — formatted, multi-tab
+↓
+📊 Export PowerPoint (.pptx) — charts + AI commentary
+
+text
+
+
+## 📂 Data Sources
+
+### 1. Sales Data
+- **Format:** `.xlsx`, `.xls`, or `.pdf`
+- **Structures supported:**
+  - **Columnar** — daily rows with Date + Sales columns
+  - **Pivot** — tenants as rows, months as columns
+  - **PDF Daily** — OCR-extracted daily sales reports
+- Tenant names auto-detected from file content or filename
+
+### 2. Traffic Data
+- **Format:** `.xlsx` exported from Google Sheets
+- **Structure:** Daily rows with date + vehicle counts (Mobil, Motor, Bus, etc.)
+- Looks for `TOTAL` or `140%` column as the visitor count
+- Supports Indonesian date format (`Jumat, 19 Desember 2025`)
+
+### 3. Event Calendar
+- **Format:** `.xlsx` with one tab per month
+- **Structure:** Date column + location sub-columns (Main Atrium, Amphitheatre, Foodtainment, Other)
+- Auto-detected by fingerprint — file must contain location keywords
+- Handles:
+  - Split two-row headers
+  - Merged date cells (dates spanning multiple rows)
+  - Sheet names with or without year (`"MEI"` or `"MEI 2026"`)
+  - `PERIODE:` header rows
+  - Filled or empty TIME columns
+
+## 🏗️ Architecture
+project/
+├── app.py # Flask server, parsers, Excel export, routes
+├── event_parser.py # Event calendar parser (multi-sheet)
+├── chart_builder.py # matplotlib chart generation
+├── llm_writer.py # AI commentary (OpenAI) with template fallback
+├── pptx_builder.py # PowerPoint assembly (python-pptx)
+├── requirements.txt
+├── Dockerfile
+├── README.md
+├── temp_uploads/ # (auto-created) temporary file storage
+└── generated_reports/ # (auto-created) exported reports
+
+text
+
+
+### Design Principles
+
+| Principle | Implementation |
+|---|---|
+| **Deterministic** | Python calculates all numbers, charts, and KPIs |
+| **AI for commentary only** | LLM writes executive summary & recommendations — never calculates |
+| **Graceful fallback** | No OpenAI key? Template text is used automatically |
+| **Simple pipeline** | Upload → Parse → Preview → Export. No database, no dashboard |
+
+## 📊 Excel Export
+
+Multi-tab workbook with professional formatting:
+
+| Tab | Content |
+|---|---|
+| **Monthly Summary** | All tenants × all months, with totals, traffic row, sales/visitor row, events row |
+| **[Tenant Name]** | Daily breakdown for each tenant: Date, Day, Day Type, Sales, Mall Traffic, Sales/Visitor, Events |
+| **Events** | Full event calendar for the target month: Date, Event Name, Location, Category |
+
+### Features
+- Target month column highlighted
+- Weekend rows in green
+- Alternating row colors
+- Grand total rows
+- Freeze panes on all sheets
+- IDR number formatting (`#,##0`)
+
+## 📊 PowerPoint Export
+
+7-slide management presentation:
+
+| Slide | Content | Source |
+|---|---|---|
+| 1 | Cover | Month, timestamp, branding |
+| 2 | Executive Summary | 5 KPI cards + AI paragraph |
+| 3 | Monthly Sales | Bar chart + AI notes |
+| 4 | Top Tenants | Horizontal bar chart + AI notes |
+| 5 | Traffic & Spend | Dual-axis chart + AI notes |
+| 6 | Daily Sales Pattern | Line chart with weekend shading + 7-day MA |
+| 7 | Events Calendar | Event cards grouped by date |
+| 8 | Recommendations | 4 AI-generated action items |
+
+### Charts (matplotlib)
+- Monthly sales bar chart (target month highlighted)
+- Top 10 tenants horizontal bar
+- Traffic + Sales/Visitor dual-axis (bar + line)
+- Daily sales line with weekend shading, peak annotation, 7-day moving average
+
+### AI Commentary (OpenAI)
+- Model: `gpt-4o-mini` (fast, cheap)
+- Temperature: `0.4` (consistent, factual)
+- Structured JSON output
+- Falls back to template text if no API key
+
+## 🔍 Parser Details
+
+### Sales Parser Pipeline
+try_event_parser() → fingerprint check (Main Atrium etc.)
+↓ (not event file)
+try_traffic_parser() → looks for TOTAL/140% column
+↓ (not traffic)
+try_excel_columnar() → Date + Sales column detection
+↓ (no columns found)
+try_excel_pivot() → month headers as columns
+↓ (no pivot found)
+try_pdf_daily() → OCR/text line parsing
+
+text
+
+
+### Event Parser Pipeline
+parse_event_file(filepath)
+↓
+fingerprint check (Main Atrium / Amphitheatre / Foodtainment)
+↓ (confirmed event file)
+for each sheet:
+↓
+detect expected month (sheet name → PERIODE header → year hint)
+↓
+find header row (Date column anchor)
+↓
+catch-all column mapping (every column between Date and Category)
+↓
+extract events with strict month enforcement
+↓
+deduplicate
+↓
+merge all sheets → unified event dataset
+
+text
+
+
+### Month Validation
+- Every uploaded file is checked for month/year references
+- Compared against the user-selected target month
+- Status: ✅ Match | ⚠️ Warning | ❌ Mismatch
+- Supports Indonesian month names (Januari, Februari, Maret...)
+
+### Number Parsing
+- Handles Indonesian formatting: `330.685.175` (dots as thousands separator)
+- Handles Western formatting: `128,939,034`
+- Handles plain numbers: `5000000`
+- Handles decimals: `1,234.56`
+
+## 🚀 Quick Start
+
+### Local Development
 
 ```bash
-cd tenant_sales_aggregator
+# Clone and install
 pip install -r requirements.txt
+
+# Run
 python app.py
-```
 
-Then open **http://localhost:5000** in your browser.
+# Open browser
+http://localhost:5000
+With AI Commentary
+Bash
 
-No internet connection is required once the packages above are installed —
-Chart.js is vendored locally in `static/chart.umd.js` and the UI uses system
-fonts, so it works fully offline (useful if you're running this on a mall
-office machine with restricted network access).
+# Set OpenAI key (optional — works without it)
+export OPENAI_API_KEY=sk-...
+python app.py
+Docker
+Bash
 
-## How to use it
+# Build
+docker build -t mall-report .
 
-1. Drag and drop (or browse for) one or more tenant `.xlsx`/`.xls` files.
-   Each file needs at least a **Date** column and a **Sales** column (a few
-   common variants like "Tanggal" / "Revenue" are also recognized).
-2. Click **Process files**. The dashboard shows the Monthly_Summary table
-   and a chart per tenant, with weekend/holiday days marked in green.
-3. Click **Export integrated report (.xlsx)** to download the full workbook.
+# Run
+docker run -p 5000:5000 mall-report
 
-Files that are missing a required column, or have no valid dates, are
-skipped with an explanation shown on screen — the rest of the batch still
-processes normally.
+# With AI
+docker run -p 5000:5000 -e OPENAI_API_KEY=sk-... mall-report
+Railway / Cloud Deploy
+Bash
 
-## What's inside
+# Just push — Dockerfile handles everything
+# Set OPENAI_API_KEY as environment variable (optional)
+📋 Requirements
+text
 
-| File | Purpose |
-|---|---|
-| `backend/data_parser.py` | Phase 1 — reads tenant files, builds a continuous daily timeline for the month (missing dates filled with 0 sales), classifies each day as Weekday/Weekend using the Indonesian public holiday calendar (`holidays` library, `country='ID'`) |
-| `backend/excel_export.py` | Phases 2–3 — builds the 6-sheet workbook (`Monthly_Summary`, one sheet per tenant, `All_Tenants_Weekends`, `All_Tenants_Weekdays`) with live formulas and a native Excel line chart per tenant sheet |
-| `app.py` | Phase 4 — Flask server: upload endpoint, processing pipeline, download endpoint |
-| `templates/index.html`, `static/` | Phase 5 — the upload zone + dashboard UI (summary table, per-tenant Chart.js charts, error banners) |
+Python 3.11+
+flask>=3.0
+pandas>=2.0
+openpyxl>=3.1
+xlrd>=2.0
+pdfplumber>=0.10
+pdf2image>=1.17
+pytesseract>=0.3
+werkzeug>=3.0
+python-pptx>=0.6.23
+matplotlib>=3.9
+numpy>=1.26
+openai>=1.30
+System Dependencies (for PDF OCR)
+text
 
-## Assumptions worth knowing about
-
-- **Missing dates are filled with 0 sales**, not interpolated or dropped —
-  the spec asked for a continuous timeline with no gaps, and 0 was the
-  least presumptive way to represent an unreported/closed day. If your
-  tenants sometimes skip reporting rather than actually having zero sales,
-  you may want to review those flat days before trusting the averages.
-- **A date that appears twice in one tenant's file is summed**, not
-  overwritten, on the assumption that both rows are same-day sales entries.
-- **`Monthly_Summary` uses live Excel formulas** (`SUM`, `AVERAGEIFS`)
-  referencing each tenant's own sheet, so the numbers recalculate
-  automatically if you edit a tenant sheet after export.
-- The `All_Tenants_Weekends` / `All_Tenants_Weekdays` sheets are filtered
-  snapshots (not formulas) — regenerate the report if the underlying data
-  changes.
-
-## Sample data
-
-`sample_data/` has a few generated example tenant files (including one
-intentionally missing its Sales column) if you want to try the app before
-pointing it at real K Square exports.
+tesseract-ocr
+poppler-utils
+🔧 Configuration
+Setting	Where	Default
+Target month/year	Web UI dropdown	Current month
+OpenAI API key	Environment variable OPENAI_API_KEY	None (template fallback)
+Upload folder	UPLOAD_FOLDER in app.py	./temp_uploads/
+Report folder	REPORTS_FOLDER in app.py	./generated_reports/
+Server port	Environment variable PORT	5000
+📁 Supported File Formats
+Format	Sales	Traffic	Events
+.xlsx	✅	✅	✅
+.xls	✅	✅	✅
+.pdf (digital)	✅	❌	❌
+.pdf (scanned/OCR)	✅	❌	❌
+🛡️ Error Handling
+Files that fail to parse are listed with warnings — never crash the whole upload
+Month mismatches are flagged but files are still processed
+Missing traffic or events data → those sections simply omitted from exports
+LLM failure → automatic template fallback, report still generates
+Temporary upload files are cleaned up after processing
+📝 Notes
+Not a KPI dashboard — this is a report generation tool
+Main output is Excel + PowerPoint — the web UI is for preview and validation
+AI is optional — the system is fully functional without an OpenAI key
+Calculations are deterministic — Python does all math, AI only writes text
