@@ -3,10 +3,12 @@
 Robust parser for the mall's internal event calendar Excel file.
 
 Guarantees:
-  1. Sheet-Level Month Locking: Events are strictly bound to the month 
-     declared by the sheet name or PERIODE header. No cross-month leaks.
-  2. Catch-All Column Mapping: Every column between Date and Status/Category 
-     is scanned for events. Zero events can be missed due to unknown headers.
+  1. Only claims files that contain event-calendar fingerprints
+     (Main Atrium, Amphitheatre, Foodtainment)
+  2. Sheet-Level Month Locking: Events strictly bound to declared month
+  3. Catch-All Column Mapping: Every column between Date and Category/Status
+     is scanned for events
+  4. Handles sheet names with or without year (e.g. "MEI" or "MEI 2026")
 """
 import re
 import pandas as pd
@@ -28,6 +30,9 @@ MONTH_MAP = {
     "nov": 11, "nop": 11, "nopember": 11, "november": 11,
     "des": 12, "desember": 12, "december": 12,
 }
+
+# These words MUST appear somewhere in the file for it to be an event calendar
+EVENT_FINGERPRINTS = ["main atrium", "amphitheatre", "amphitheater", "foodtainment"]
 
 
 def _is_date_obj(val):
@@ -67,9 +72,11 @@ def _norm(val):
 
 
 def _parse_periode(text):
+    """Parse 'MEI 2026' or 'PERIODE: MEI 2026'. Returns (year, month) or (None, None)."""
     if _is_date_obj(text):
         return None, None
     s = str(text).strip().lower()
+    # Try "month year" pattern
     m = re.search(r"([a-z]{3,})\s+(\d{4})", s)
     if m:
         month_name = m.group(1)
@@ -80,14 +87,23 @@ def _parse_periode(text):
     return None, None
 
 
+def _parse_month_only(text):
+    """Parse just a month name like 'MEI' or 'APRIL'. Returns month number or None."""
+    if _is_date_obj(text):
+        return None
+    s = str(text).strip().lower()
+    # Must be ONLY a month name (no numbers, no other words)
+    s = re.sub(r"\s+", "", s)
+    return MONTH_MAP.get(s)
+
+
 def _parse_date(val, expected_year=None, expected_month=None):
-    """
-    Parse date with strict anchoring to the expected sheet month/year if provided.
-    """
+    """Parse date with strict anchoring to expected sheet month/year."""
     if val is None:
         return None
 
     dt = None
+
     if isinstance(val, datetime):
         dt = val.date()
     elif isinstance(val, date):
@@ -102,7 +118,7 @@ def _parse_date(val, expected_year=None, expected_month=None):
         if not s or s.lower() in ("nan", "none", ""):
             return None
 
-        # Check if it's just an integer day number (e.g. "1", "15") from merged cells
+        # Plain day number (e.g. "1", "15") — common in merged-cell layouts
         if s.isdigit() and expected_year and expected_month:
             day = int(s)
             if 1 <= day <= 31:
@@ -127,62 +143,115 @@ def _parse_date(val, expected_year=None, expected_month=None):
             except (ValueError, OverflowError):
                 pass
 
-    if dt:
-        # If we have an expected sheet month, ensure the parsed date matches it!
-        # If day/month got flipped (e.g. 5/11 vs 11/5), correct it if possible.
-        if expected_year and expected_month:
-            if dt.year != expected_year or dt.month != expected_month:
-                # Try swapping day and month
-                try:
-                    swapped = date(dt.year, dt.day, dt.month)
-                    if swapped.year == expected_year and swapped.month == expected_month:
-                        dt = swapped
-                except ValueError:
-                    pass
-            # Final check: if month still doesn't match sheet, force sheet month with original day
-            if dt.month != expected_month and 1 <= dt.day <= 31:
-                try:
-                    dt = date(expected_year, expected_month, dt.day)
-                except ValueError:
-                    pass
-        return dt
+    if dt and expected_year and expected_month:
+        # If parsed date doesn't match expected month, try to fix it
+        if dt.year == expected_year and dt.month == expected_month:
+            return dt
 
-    return None
+        # Try swapping day and month (common DD/MM vs MM/DD confusion)
+        if dt.day <= 12:
+            try:
+                swapped = date(dt.year, dt.day, dt.month)
+                if swapped.year == expected_year and swapped.month == expected_month:
+                    return swapped
+            except ValueError:
+                pass
+
+        # Force the expected month with the parsed day
+        try:
+            forced = date(expected_year, expected_month, dt.day)
+            return forced
+        except ValueError:
+            pass
+
+        return None  # Can't reconcile — drop this date
+
+    return dt
 
 
-def try_event_parser(rows, sheet_name=""):
+def _has_event_fingerprint(rows):
     """
-    Parse a SINGLE sheet's rows with strict sheet-level month locking
-    and catch-all column mapping.
+    Check if these rows contain event calendar fingerprints.
+    Returns True only if Main Atrium / Amphitheatre / Foodtainment appears.
+    """
+    for row in rows[:20]:
+        for cell in row:
+            if _is_date_obj(cell):
+                continue
+            n = _norm(cell)
+            for fp in EVENT_FINGERPRINTS:
+                if fp in n:
+                    return True
+    return False
+
+
+def try_event_parser(rows, sheet_name="", year_hint=None):
+    """
+    Parse a SINGLE sheet's rows as event calendar.
+
+    Args:
+        rows: list of lists
+        sheet_name: e.g. "MEI" or "MEI 2026"
+        year_hint: fallback year if sheet name has no year
     """
     if not rows or len(rows) < 3:
         return None
 
-    # ── Step 1: Lock to Sheet Month / Year ─────────────────────
+    # Must have event fingerprint
+    if not _has_event_fingerprint(rows):
+        return None
+
+    # ── Step 1: Determine expected month/year ──────────────────
     expected_year = None
     expected_month = None
 
-    # Check sheet name first (e.g. "MEI 2026")
+    # Try sheet name with year: "MEI 2026"
     if sheet_name:
         yr, mn = _parse_periode(sheet_name)
         if yr:
             expected_year = yr
             expected_month = mn
 
-    # If sheet name didn't give a month, scan top rows for PERIODE
-    if not expected_year:
-        for row in rows[:10]:
-            for cell in row:
-                yr, mn = _parse_periode(cell)
-                if yr:
+    # Try sheet name without year: "MEI", "APRIL"
+    if not expected_month and sheet_name:
+        mn = _parse_month_only(sheet_name)
+        if mn:
+            expected_month = mn
+
+    # Scan top rows for PERIODE header: "PERIODE: MEI 2026"
+    for row in rows[:10]:
+        for cell in row:
+            yr, mn = _parse_periode(cell)
+            if yr:
+                if not expected_year:
                     expected_year = yr
+                if not expected_month:
                     expected_month = mn
-                    break
+                break
+        if expected_year and expected_month:
+            break
+
+    # If we still don't have a year, use the hint or scan for any year
+    if not expected_year and year_hint:
+        expected_year = year_hint
+
+    if not expected_year:
+        # Last resort: scan for any 4-digit year in top rows
+        for row in rows[:15]:
+            for cell in row:
+                if _is_date_obj(cell):
+                    continue
+                m = re.search(r"(\d{4})", str(cell))
+                if m:
+                    yr = int(m.group(1))
+                    if 2020 <= yr <= 2035:
+                        expected_year = yr
+                        break
             if expected_year:
                 break
 
     if not expected_year or not expected_month:
-        return None  # Can't determine which month this sheet belongs to
+        return None
 
     # ── Step 2: Find Header Row ─────────────────────────────────
     date_header_idx = None
@@ -190,8 +259,13 @@ def try_event_parser(rows, sheet_name=""):
         if any(_is_date_obj(c) for c in row):
             continue
         normed = [_norm(c) for c in row]
-        if any(n in ("date", "tanggal", "tgl", "hari/tanggal") or n.startswith("date") for n in normed):
-            date_header_idx = idx
+        for n in normed:
+            if n in ("date", "tanggal", "tgl", "hari/tanggal",
+                     "hari/ tanggal", "hari / tanggal") or \
+               n.startswith("date") or n.startswith("tanggal"):
+                date_header_idx = idx
+                break
+        if date_header_idx is not None:
             break
 
     if date_header_idx is None:
@@ -203,14 +277,16 @@ def try_event_parser(rows, sheet_name=""):
     # Find Date column
     date_col = None
     for c_idx, n in enumerate(row_a_norm):
-        if n in ("date", "tanggal", "tgl", "hari/tanggal") or n.startswith("date"):
+        if n in ("date", "tanggal", "tgl", "hari/tanggal",
+                 "hari/ tanggal", "hari / tanggal") or \
+           n.startswith("date") or n.startswith("tanggal"):
             date_col = c_idx
             break
 
     if date_col is None:
         return None
 
-    # Find Category / Status columns to bound our event columns
+    # Find Category / Status columns to bound event columns
     category_col = None
     status_col = None
     for c_idx, n in enumerate(row_a_norm):
@@ -220,37 +296,67 @@ def try_event_parser(rows, sheet_name=""):
             status_col = c_idx
 
     # ── Step 3: Catch-All Column Mapping ────────────────────────
-    # EVERY column between Date and Category/Status is an event column.
+    # Skip "Time" column if it exists right after Date
+    time_col = None
+    for c_idx, n in enumerate(row_a_norm):
+        if n in ("time", "waktu", "jam"):
+            time_col = c_idx
+
+    # Event columns = everything between Date and Category/Status,
+    # excluding Time
     max_col = min(
-        category_col if category_col is not None else 999,
-        status_col if status_col is not None else 999,
-        len(row_a)
+        c for c in [category_col, status_col, len(row_a)]
+        if c is not None
     )
 
-    col_map = {}
+    # Get location names from row B (sub-header row)
     row_b = rows[date_header_idx + 1] if date_header_idx + 1 < len(rows) else []
+    row_b_has_locations = False
+    if row_b:
+        for cell in row_b:
+            n = _norm(cell)
+            for fp in EVENT_FINGERPRINTS:
+                if fp in n:
+                    row_b_has_locations = True
+                    break
+            if row_b_has_locations:
+                break
 
+    col_map = {}
     for c_idx in range(date_col + 1, max_col):
-        # Try to get a location name from Row B, then Row A, else default
+        if c_idx == time_col:
+            continue
+
         loc_name = f"Area {c_idx}"
-        if c_idx < len(row_b) and str(row_b[c_idx]).strip():
-            loc_name = str(row_b[c_idx]).strip().title()
-        elif c_idx < len(row_a) and str(row_a[c_idx]).strip():
-            txt = str(row_a[c_idx]).strip()
-            if txt.lower() not in ("date", "time", "tanggal", "waktu"):
-                loc_name = txt.title()
+
+        # Try row B first (sub-headers like "Main Atrium")
+        if row_b_has_locations and c_idx < len(row_b):
+            b_text = _norm(row_b[c_idx])
+            if b_text and b_text not in ("nan", "none", ""):
+                loc_name = str(row_b[c_idx]).strip().title()
+
+        # Fall back to row A
+        elif c_idx < len(row_a):
+            a_text = _norm(row_a[c_idx])
+            if a_text and a_text not in ("date", "time", "tanggal", "waktu",
+                                          "jam", "nan", "none", "location",
+                                          "lokasi", "tempat", ""):
+                loc_name = str(row_a[c_idx]).strip().title()
+
         col_map[c_idx] = loc_name
 
     if not col_map:
         return None
 
-    data_start = date_header_idx + 2 if row_b else date_header_idx + 1
+    # Data starts after row B if it has location sub-headers
+    data_start = date_header_idx + 2 if row_b_has_locations else date_header_idx + 1
 
-    # ── Step 4: Extract Events with Strict Month Enforcement ────
+    # ── Step 4: Extract Events ──────────────────────────────────
     events_flat = []
     current_date = None
 
     for row in rows[data_start:]:
+        # Try to parse date
         if date_col < len(row):
             parsed_date = _parse_date(row[date_col], expected_year, expected_month)
             if parsed_date:
@@ -259,7 +365,7 @@ def try_event_parser(rows, sheet_name=""):
         if current_date is None:
             continue
 
-        # STRICT ENFORCEMENT: Drop any row whose date doesn't match the sheet's month
+        # STRICT: only keep events matching expected month
         if current_date.year != expected_year or current_date.month != expected_month:
             continue
 
@@ -268,7 +374,6 @@ def try_event_parser(rows, sheet_name=""):
         for loc_col, loc_name in col_map.items():
             if loc_col >= len(row):
                 continue
-
             event_text = _clean_event_text(row[loc_col])
             if not event_text:
                 continue
@@ -299,11 +404,7 @@ def try_event_parser(rows, sheet_name=""):
         daily_map[e["date"]].append(e["event_name"])
 
     daily = [
-        {
-            "date": d,
-            "events": evts,
-            "event_count": len(evts),
-        }
+        {"date": d, "events": evts, "event_count": len(evts)}
         for d, evts in sorted(daily_map.items())
     ]
 
@@ -323,13 +424,17 @@ def try_event_parser(rows, sheet_name=""):
         "daily": daily,
         "monthly": monthly,
         "events_flat": unique,
-        "message": f"Events ({expected_year}-{expected_month:02d}): {len(unique)} event(s) extracted.",
+        "message": f"Events ({monthly_key}): {len(unique)} event(s) across {len(daily_map)} day(s).",
     }
 
 
 # ── Multi-sheet reader ────────────────────────────────────────
 
 def parse_event_file(filepath):
+    """
+    Read event calendar Excel with multiple tabs.
+    Only claims the file if it contains event fingerprints.
+    """
     filepath = Path(filepath)
 
     try:
@@ -339,6 +444,53 @@ def parse_event_file(filepath):
     except Exception:
         return None
 
+    # ── Quick fingerprint check: read first sheet to verify ─────
+    # This prevents claiming sales/traffic files
+    try:
+        df_check = pd.read_excel(xl, sheet_name=0, header=None, nrows=20).fillna("")
+        check_rows = []
+        for row in df_check.values.tolist():
+            check_rows.append([str(c).strip() for c in row])
+
+        if not _has_event_fingerprint(check_rows):
+            # Try second sheet too (first sheet might be a cover page)
+            if len(sheet_names) > 1:
+                df_check2 = pd.read_excel(xl, sheet_name=1, header=None, nrows=20).fillna("")
+                check_rows2 = [[str(c).strip() for c in row] for row in df_check2.values.tolist()]
+                if not _has_event_fingerprint(check_rows2):
+                    return None  # Not an event file
+            else:
+                return None  # Not an event file
+    except Exception:
+        return None
+
+    # ── First pass: collect year from any sheet that has it ──────
+    year_hint = None
+    for sheet_name in sheet_names:
+        yr, mn = _parse_periode(sheet_name)
+        if yr:
+            year_hint = yr
+            break
+
+    if not year_hint:
+        # Scan first few sheets for PERIODE rows
+        for sheet_name in sheet_names[:3]:
+            try:
+                df = pd.read_excel(xl, sheet_name=sheet_name, header=None, nrows=10).fillna("")
+                for row in df.values.tolist():
+                    for cell in row:
+                        yr, mn = _parse_periode(cell)
+                        if yr:
+                            year_hint = yr
+                            break
+                    if year_hint:
+                        break
+            except Exception:
+                continue
+            if year_hint:
+                break
+
+    # ── Parse each sheet ────────────────────────────────────────
     all_events_flat = []
     all_monthly = {}
     messages = []
@@ -366,7 +518,7 @@ def parse_event_file(filepath):
         if not rows:
             continue
 
-        result = try_event_parser(rows, sheet_name)
+        result = try_event_parser(rows, sheet_name, year_hint=year_hint)
         if result and result.get("success"):
             all_events_flat.extend(result.get("events_flat", []))
             for mk, mv in result.get("monthly", {}).items():
@@ -374,12 +526,15 @@ def parse_event_file(filepath):
                     all_monthly[mk] = {"events": [], "event_count": 0, "event_days": 0}
                 all_monthly[mk]["events"].extend(mv["events"])
                 all_monthly[mk]["event_count"] += mv["event_count"]
-                all_monthly[mk]["event_days"] = len(set(e["date"] for e in all_monthly[mk]["events"]))
+                all_monthly[mk]["event_days"] = len(set(
+                    e["date"] for e in all_monthly[mk]["events"]
+                ))
             messages.append(f"Sheet '{sheet_name}': {result['message']}")
 
     if not all_events_flat:
         return None
 
+    # Deduplicate
     seen = set()
     unique_flat = []
     for e in all_events_flat:
@@ -394,7 +549,7 @@ def parse_event_file(filepath):
         daily_map[e["date"]].append(e["event_name"])
 
     daily = [
-        {"date": d, "events": evts, "event_count": len(evts)}
+        {"date": d, "events": list(set(evts)), "event_count": len(set(evts))}
         for d, evts in sorted(daily_map.items())
     ]
 
@@ -407,5 +562,9 @@ def parse_event_file(filepath):
         "daily": daily,
         "monthly": all_monthly,
         "events_flat": unique_flat,
-        "message": f"Event calendar: {len(unique_flat)} event(s) across {len(months_found)} month(s). Sheets: {', '.join(sheet_names)}",
+        "message": (
+            f"Event calendar: {len(unique_flat)} event(s) across "
+            f"{len(months_found)} month(s) from {len(messages)} sheet(s). "
+            f"Months: {', '.join(months_found)}"
+        ),
     }
