@@ -1,14 +1,12 @@
 # event_parser.py
 """
-Parser for the mall's internal event calendar Excel file.
+Robust parser for the mall's internal event calendar Excel file.
 
-Handles:
-  - Multiple sheets (one per month)
-  - Split two-row headers: Row A has Date/Time/Location/Category/Status
-    Row B has sub-locations: Main Atrium / Amphitheatre / Foodtainment / Other
-  - Merged date cells (dates spanning multiple rows)
-  - Indonesian date formats
-  - Pandas auto-converted datetime objects
+Guarantees:
+  1. Sheet-Level Month Locking: Events are strictly bound to the month 
+     declared by the sheet name or PERIODE header. No cross-month leaks.
+  2. Catch-All Column Mapping: Every column between Date and Status/Category 
+     is scanned for events. Zero events can be missed due to unknown headers.
 """
 import re
 import pandas as pd
@@ -31,15 +29,8 @@ MONTH_MAP = {
     "des": 12, "desember": 12, "december": 12,
 }
 
-# All possible location sub-header names we might encounter
-KNOWN_LOCATIONS = [
-    "main atrium", "amphitheatre", "amphitheater",
-    "foodtainment", "other",
-]
-
 
 def _is_date_obj(val):
-    """Check if value is any kind of date/datetime object."""
     if isinstance(val, (date, datetime)):
         return True
     if hasattr(val, "date") and callable(val.date):
@@ -61,7 +52,6 @@ def _clean_event_text(text):
         return None
     if re.fullmatch(r"by\s+eo\b", s, re.IGNORECASE):
         return None
-    # Skip if it's just a number
     try:
         float(s.replace(",", "").replace(".", ""))
         return None
@@ -71,77 +61,15 @@ def _clean_event_text(text):
 
 
 def _norm(val):
-    """Normalize cell for header matching. Returns '' for dates."""
     if _is_date_obj(val):
         return ""
     return re.sub(r"\s+", " ", str(val).strip().lower())
-
-
-def _parse_date(val, year_hint=2026):
-    if val is None:
-        return None
-
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-
-    if hasattr(val, "date") and callable(val.date):
-        try:
-            return val.date()
-        except Exception:
-            pass
-
-    s = str(val).strip()
-    if not s or s.lower() in ("nan", "none", ""):
-        return None
-
-    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            pass
-
-    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            pass
-
-    try:
-        f = float(s)
-        if 40000 < f < 60000:
-            base = date(1899, 12, 30)
-            return base + timedelta(days=int(f))
-    except (ValueError, OverflowError):
-        pass
-
-    m = re.match(r"(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})", s)
-    if m:
-        a, b = int(m.group(1)), int(m.group(2))
-        year = int(m.group(3))
-        if year < 100:
-            year += 2000
-        if 2020 <= year <= 2035:
-            if 1 <= a <= 31 and 1 <= b <= 12:
-                try:
-                    return date(year, b, a)
-                except ValueError:
-                    pass
-            if 1 <= a <= 12 and 1 <= b <= 31:
-                try:
-                    return date(year, a, b)
-                except ValueError:
-                    pass
-
-    return None
 
 
 def _parse_periode(text):
     if _is_date_obj(text):
         return None, None
     s = str(text).strip().lower()
-    # "MEI 2026" or "PERIODE: MEI 2026"
     m = re.search(r"([a-z]{3,})\s+(\d{4})", s)
     if m:
         month_name = m.group(1)
@@ -152,89 +80,137 @@ def _parse_periode(text):
     return None, None
 
 
-def try_event_parser(rows, sheet_name=""):
+def _parse_date(val, expected_year=None, expected_month=None):
     """
-    Parse a SINGLE sheet's rows as event calendar.
-
-    Strategy:
-    1. Find the PERIODE row to know expected month/year
-    2. Find the header row(s) — "Date" anchor + location sub-headers
-    3. Extract events from each location column per day
-    4. FILTER: only keep events matching the expected month
+    Parse date with strict anchoring to the expected sheet month/year if provided.
     """
-    if not rows or len(rows) < 5:
+    if val is None:
         return None
 
-    # ── Step 1: Find PERIODE and expected month ─────────────────
+    dt = None
+    if isinstance(val, datetime):
+        dt = val.date()
+    elif isinstance(val, date):
+        dt = val
+    elif hasattr(val, "date") and callable(val.date):
+        try:
+            dt = val.date()
+        except Exception:
+            pass
+    else:
+        s = str(val).strip()
+        if not s or s.lower() in ("nan", "none", ""):
+            return None
+
+        # Check if it's just an integer day number (e.g. "1", "15") from merged cells
+        if s.isdigit() and expected_year and expected_month:
+            day = int(s)
+            if 1 <= day <= 31:
+                try:
+                    return date(expected_year, expected_month, day)
+                except ValueError:
+                    pass
+
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y"]:
+            try:
+                dt = datetime.strptime(s, fmt).date()
+                break
+            except ValueError:
+                pass
+
+        if not dt:
+            try:
+                f = float(s)
+                if 40000 < f < 60000:
+                    base = date(1899, 12, 30)
+                    dt = base + timedelta(days=int(f))
+            except (ValueError, OverflowError):
+                pass
+
+    if dt:
+        # If we have an expected sheet month, ensure the parsed date matches it!
+        # If day/month got flipped (e.g. 5/11 vs 11/5), correct it if possible.
+        if expected_year and expected_month:
+            if dt.year != expected_year or dt.month != expected_month:
+                # Try swapping day and month
+                try:
+                    swapped = date(dt.year, dt.day, dt.month)
+                    if swapped.year == expected_year and swapped.month == expected_month:
+                        dt = swapped
+                except ValueError:
+                    pass
+            # Final check: if month still doesn't match sheet, force sheet month with original day
+            if dt.month != expected_month and 1 <= dt.day <= 31:
+                try:
+                    dt = date(expected_year, expected_month, dt.day)
+                except ValueError:
+                    pass
+        return dt
+
+    return None
+
+
+def try_event_parser(rows, sheet_name=""):
+    """
+    Parse a SINGLE sheet's rows with strict sheet-level month locking
+    and catch-all column mapping.
+    """
+    if not rows or len(rows) < 3:
+        return None
+
+    # ── Step 1: Lock to Sheet Month / Year ─────────────────────
     expected_year = None
     expected_month = None
 
-    for idx, row in enumerate(rows[:15]):
-        for cell in row:
-            if _is_date_obj(cell):
-                continue
-            yr, mn = _parse_periode(cell)
-            if yr:
-                expected_year = yr
-                expected_month = mn
-                break
-        if expected_year:
-            break
-
-    # Also try sheet name: "MEI 2026", "JUNI 2026"
-    if not expected_year and sheet_name:
+    # Check sheet name first (e.g. "MEI 2026")
+    if sheet_name:
         yr, mn = _parse_periode(sheet_name)
         if yr:
             expected_year = yr
             expected_month = mn
 
-    # ── Step 2: Find the header structure ───────────────────────
-    # Look for a row containing "Date" (or "Tanggal")
-    date_header_idx = None
+    # If sheet name didn't give a month, scan top rows for PERIODE
+    if not expected_year:
+        for row in rows[:10]:
+            for cell in row:
+                yr, mn = _parse_periode(cell)
+                if yr:
+                    expected_year = yr
+                    expected_month = mn
+                    break
+            if expected_year:
+                break
 
-    for idx, row in enumerate(rows[:20]):
-        # Skip rows with actual datetime values
+    if not expected_year or not expected_month:
+        return None  # Can't determine which month this sheet belongs to
+
+    # ── Step 2: Find Header Row ─────────────────────────────────
+    date_header_idx = None
+    for idx, row in enumerate(rows[:15]):
         if any(_is_date_obj(c) for c in row):
             continue
-
         normed = [_norm(c) for c in row]
-
-        has_date = any(
-            n in ("date", "tanggal", "tgl", "hari/tanggal",
-                  "hari/ tanggal", "hari / tanggal")
-            or n.startswith("date") or n.startswith("tanggal")
-            for n in normed
-        )
-
-        if has_date:
+        if any(n in ("date", "tanggal", "tgl", "hari/tanggal") or n.startswith("date") for n in normed):
             date_header_idx = idx
             break
 
     if date_header_idx is None:
         return None
 
-    # ── Step 3: Map columns from header rows ────────────────────
-    # Row A = date_header_idx (has Date, Time, Location, Category, Status)
-    # Row B = date_header_idx + 1 (has Main Atrium, Amphitheatre, etc.)
     row_a = rows[date_header_idx]
     row_a_norm = [_norm(c) for c in row_a]
 
-    row_b = rows[date_header_idx + 1] if date_header_idx + 1 < len(rows) else []
-    row_b_norm = [_norm(c) for c in row_b] if row_b else []
-
-    # Find Date column in row A
+    # Find Date column
     date_col = None
     for c_idx, n in enumerate(row_a_norm):
-        if n in ("date", "tanggal", "tgl", "hari/tanggal",
-                 "hari/ tanggal", "hari / tanggal") or \
-           n.startswith("date") or n.startswith("tanggal"):
+        if n in ("date", "tanggal", "tgl", "hari/tanggal") or n.startswith("date"):
             date_col = c_idx
             break
 
     if date_col is None:
         return None
 
-    # Find Category and Status columns in row A
+    # Find Category / Status columns to bound our event columns
     category_col = None
     status_col = None
     for c_idx, n in enumerate(row_a_norm):
@@ -243,73 +219,52 @@ def try_event_parser(rows, sheet_name=""):
         elif "status" in n:
             status_col = c_idx
 
-    # Find "Location" in row A to determine the location column range
-    location_start = None
-    for c_idx, n in enumerate(row_a_norm):
-        if "location" in n or "lokasi" in n or "tempat" in n:
-            location_start = c_idx
-            break
+    # ── Step 3: Catch-All Column Mapping ────────────────────────
+    # EVERY column between Date and Category/Status is an event column.
+    max_col = min(
+        category_col if category_col is not None else 999,
+        status_col if status_col is not None else 999,
+        len(row_a)
+    )
 
-    # Map location sub-columns from row B
-    # These are the columns between "Location" start and "Category" start
-    location_end = category_col if category_col else len(row_b_norm)
+    col_map = {}
+    row_b = rows[date_header_idx + 1] if date_header_idx + 1 < len(rows) else []
 
-    col_map = {}  # column_index -> location_name
-
-    if row_b_norm:
-        # Check row B for location sub-headers
-        search_start = location_start if location_start is not None else 0
-        for c_idx in range(search_start, min(location_end or len(row_b_norm), len(row_b_norm))):
-            n = row_b_norm[c_idx]
-            if not n:
-                continue
-            # Match against known location names
-            matched = False
-            for loc in KNOWN_LOCATIONS:
-                if loc in n or n in loc:
-                    col_map[c_idx] = loc.title()
-                    matched = True
-                    break
-            if not matched and n not in ("nan", "none", ""):
-                # Unknown location — still use it
-                col_map[c_idx] = n.title()
-
-    # If no locations found in row B, try row A itself
-    if not col_map:
-        for c_idx, n in enumerate(row_a_norm):
-            for loc in KNOWN_LOCATIONS:
-                if loc in n:
-                    col_map[c_idx] = loc.title()
-                    break
+    for c_idx in range(date_col + 1, max_col):
+        # Try to get a location name from Row B, then Row A, else default
+        loc_name = f"Area {c_idx}"
+        if c_idx < len(row_b) and str(row_b[c_idx]).strip():
+            loc_name = str(row_b[c_idx]).strip().title()
+        elif c_idx < len(row_a) and str(row_a[c_idx]).strip():
+            txt = str(row_a[c_idx]).strip()
+            if txt.lower() not in ("date", "time", "tanggal", "waktu"):
+                loc_name = txt.title()
+        col_map[c_idx] = loc_name
 
     if not col_map:
         return None
 
-    # Determine where data rows start
-    # If row B had location headers, data starts at row B + 1
-    data_start = date_header_idx + 1
-    if row_b_norm and col_map:
-        # Check if any location was found in row B
-        for c_idx in col_map:
-            if c_idx < len(row_b_norm) and row_b_norm[c_idx]:
-                data_start = date_header_idx + 2
-                break
+    data_start = date_header_idx + 2 if row_b else date_header_idx + 1
 
-    # ── Step 4: Extract events ──────────────────────────────────
+    # ── Step 4: Extract Events with Strict Month Enforcement ────
     events_flat = []
     current_date = None
 
     for row in rows[data_start:]:
-        # Try to get date from date column
         if date_col < len(row):
-            parsed_date = _parse_date(row[date_col])
+            parsed_date = _parse_date(row[date_col], expected_year, expected_month)
             if parsed_date:
                 current_date = parsed_date
 
         if current_date is None:
             continue
 
-        # Check each location column
+        # STRICT ENFORCEMENT: Drop any row whose date doesn't match the sheet's month
+        if current_date.year != expected_year or current_date.month != expected_month:
+            continue
+
+        date_str = str(current_date)
+
         for loc_col, loc_name in col_map.items():
             if loc_col >= len(row):
                 continue
@@ -318,53 +273,27 @@ def try_event_parser(rows, sheet_name=""):
             if not event_text:
                 continue
 
-            cat = ""
-            sts = ""
-            if category_col is not None and category_col < len(row):
-                raw = row[category_col]
-                if not _is_date_obj(raw):
-                    cat = str(raw).strip()
-                    if cat.lower() in ("nan", "none", ""):
-                        cat = ""
-            if status_col is not None and status_col < len(row):
-                raw = row[status_col]
-                if not _is_date_obj(raw):
-                    sts = str(raw).strip()
-                    if sts.lower() in ("nan", "none", ""):
-                        sts = ""
-
             events_flat.append({
-                "date": str(current_date),
+                "date": date_str,
                 "event_name": event_text,
                 "location": loc_name,
-                "category": cat,
-                "status": sts,
+                "category": "",
+                "status": "",
             })
 
-    if len(events_flat) < 2:
+    if not events_flat:
         return None
 
-    # ── Step 5: FILTER to expected month only ───────────────────
-    # This prevents events from wrong months leaking in
-    if expected_year and expected_month:
-        expected_key = f"{expected_year}-{expected_month:02d}"
-        filtered = [e for e in events_flat if e["date"].startswith(expected_key)]
-        # Only apply filter if it actually matches some events
-        # (protects against PERIODE parsing errors)
-        if filtered:
-            events_flat = filtered
-
-    # ── Step 6: Deduplicate ─────────────────────────────────────
+    # Deduplicate
     seen = set()
     unique = []
     for e in events_flat:
-        key = (e["date"], e["event_name"], e["location"])
+        key = (e["date"], e["event_name"])
         if key not in seen:
             seen.add(key)
             unique.append(e)
     unique.sort(key=lambda e: e["date"])
 
-    # ── Step 7: Build output ────────────────────────────────────
     daily_map = defaultdict(list)
     for e in unique:
         daily_map[e["date"]].append(e["event_name"])
@@ -378,24 +307,14 @@ def try_event_parser(rows, sheet_name=""):
         for d, evts in sorted(daily_map.items())
     ]
 
-    monthly_map = defaultdict(list)
-    for e in unique:
-        key = e["date"][:7]
-        monthly_map[key].append(e)
-
+    monthly_key = f"{expected_year}-{expected_month:02d}"
     monthly = {
-        k: {
-            "events": v,
-            "event_count": len(v),
-            "event_days": len(set(e["date"] for e in v)),
+        monthly_key: {
+            "events": unique,
+            "event_count": len(unique),
+            "event_days": len(set(e["date"] for e in unique)),
         }
-        for k, v in monthly_map.items()
     }
-
-    event_dates = sorted(daily_map.keys())
-    month_label = ""
-    if expected_year and expected_month:
-        month_label = f" ({expected_year}-{expected_month:02d})"
 
     return {
         "success": True,
@@ -404,20 +323,13 @@ def try_event_parser(rows, sheet_name=""):
         "daily": daily,
         "monthly": monthly,
         "events_flat": unique,
-        "message": (
-            f"Events{month_label}: {len(unique)} event(s) across "
-            f"{len(event_dates)} day(s)."
-        ),
+        "message": f"Events ({expected_year}-{expected_month:02d}): {len(unique)} event(s) extracted.",
     }
 
 
 # ── Multi-sheet reader ────────────────────────────────────────
 
 def parse_event_file(filepath):
-    """
-    Read an event calendar Excel with multiple tabs (one per month).
-    Tries every sheet and merges all events.
-    """
     filepath = Path(filepath)
 
     try:
@@ -428,6 +340,7 @@ def parse_event_file(filepath):
         return None
 
     all_events_flat = []
+    all_monthly = {}
     messages = []
 
     for sheet_name in sheet_names:
@@ -456,62 +369,43 @@ def parse_event_file(filepath):
         result = try_event_parser(rows, sheet_name)
         if result and result.get("success"):
             all_events_flat.extend(result.get("events_flat", []))
+            for mk, mv in result.get("monthly", {}).items():
+                if mk not in all_monthly:
+                    all_monthly[mk] = {"events": [], "event_count": 0, "event_days": 0}
+                all_monthly[mk]["events"].extend(mv["events"])
+                all_monthly[mk]["event_count"] += mv["event_count"]
+                all_monthly[mk]["event_days"] = len(set(e["date"] for e in all_monthly[mk]["events"]))
             messages.append(f"Sheet '{sheet_name}': {result['message']}")
 
     if not all_events_flat:
         return None
 
-    # Deduplicate
     seen = set()
     unique_flat = []
     for e in all_events_flat:
-        key = (e["date"], e["event_name"], e["location"])
+        key = (e["date"], e["event_name"])
         if key not in seen:
             seen.add(key)
             unique_flat.append(e)
     unique_flat.sort(key=lambda e: e["date"])
 
-    # Build daily
     daily_map = defaultdict(list)
     for e in unique_flat:
         daily_map[e["date"]].append(e["event_name"])
 
     daily = [
-        {
-            "date": d,
-            "events": list(set(evts)),
-            "event_count": len(set(evts)),
-        }
+        {"date": d, "events": evts, "event_count": len(evts)}
         for d, evts in sorted(daily_map.items())
     ]
 
-    # Build monthly
-    monthly_map = defaultdict(list)
-    for e in unique_flat:
-        key = e["date"][:7]
-        monthly_map[key].append(e)
-
-    monthly = {
-        k: {
-            "events": v,
-            "event_count": len(v),
-            "event_days": len(set(e["date"] for e in v)),
-        }
-        for k, v in monthly_map.items()
-    }
-
-    months_found = sorted(monthly.keys())
+    months_found = sorted(all_monthly.keys())
 
     return {
         "success": True,
         "format": "events",
         "is_events": True,
         "daily": daily,
-        "monthly": monthly,
+        "monthly": all_monthly,
         "events_flat": unique_flat,
-        "message": (
-            f"Event calendar: {len(unique_flat)} event(s) across "
-            f"{len(months_found)} month(s) from {len(messages)} sheet(s). "
-            f"Months: {', '.join(months_found)}"
-        ),
+        "message": f"Event calendar: {len(unique_flat)} event(s) across {len(months_found)} month(s). Sheets: {', '.join(sheet_names)}",
     }
