@@ -2717,7 +2717,7 @@ def export_pptx():
             return jsonify({"error": "No sales data to build report"}), 400
 
         # ── Step 1: Compute KPIs (pure Python) ────────────────
-        kpis = _build_kpis(master_data, traffic_data, target_year, target_month)
+        kpis = _build_kpis(master_data, traffic_data, target_year, target_month, events_data)
 
         # ── Step 2: LLM writes commentary ─────────────────────
         # Optionally allow front-end to pass an API key
