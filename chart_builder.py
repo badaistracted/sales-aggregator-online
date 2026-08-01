@@ -269,76 +269,109 @@ def chart_traffic(
 def chart_daily_sales(
     daily_data: list,
     target_key: str,
+    traffic_daily: list = None,
     tenant_name: str = "All Tenants",
 ) -> io.BytesIO:
     """
     Line chart of daily sales for the target month.
+    Includes traffic as a secondary axis if provided.
 
-    daily_data = [{"date": "2026-05-01", "sales": 12345}, ...]
+    daily_data    = [{"date": "2026-05-01", "sales": 12345}, ...]
+    traffic_daily = [{"date": "2026-05-01", "traffic": 28066}, ...]
     """
     # Filter to target month
     filtered = [d for d in daily_data if d["date"].startswith(target_key)]
     if not filtered:
         return None
 
-    # Aggregate by date (multiple tenants may share same date)
+    # Aggregate sales by date (multiple tenants may share same date)
     from collections import defaultdict
     by_date = defaultdict(float)
     for d in filtered:
         by_date[d["date"]] += d["sales"]
 
-    dates   = sorted(by_date.keys())
-    values  = [by_date[d] for d in dates]
+    dates  = sorted(by_date.keys())
+    values = [by_date[d] for d in dates]
     x_labels = [d[8:10] for d in dates]  # just day number "01", "02"...
 
-    # Detect weekends
-    from datetime import datetime
-    weekend_mask = [datetime.strptime(d, "%Y-%m-%d").weekday() >= 5 for d in dates]
+    # Build traffic lookup
+    traffic_vals = None
+    if traffic_daily:
+        traffic_by_date = defaultdict(float)
+        for d in traffic_daily:
+            if d["date"].startswith(target_key):
+                traffic_by_date[d["date"]] += d["traffic"]
+        if traffic_by_date:
+            traffic_vals = [traffic_by_date.get(d, 0) for d in dates]
 
-    fig, ax = _base_fig(12, 5)
+    # Detect weekends
+    from datetime import datetime as dt_cls
+    weekend_mask = [dt_cls.strptime(d, "%Y-%m-%d").weekday() >= 5 for d in dates]
+
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+    fig.patch.set_facecolor(BG_WHITE)
+    ax1.set_facecolor(BG_WHITE)
+
     x = np.arange(len(dates))
 
     # Shade weekend columns
     for i, is_we in enumerate(weekend_mask):
         if is_we:
-            ax.axvspan(i - 0.5, i + 0.5, color="#E8F5E9", zorder=0, alpha=0.7)
+            ax1.axvspan(i - 0.5, i + 0.5, color="#E8F5E9", zorder=0, alpha=0.7)
 
-    # Line
-    ax.plot(x, values, color=BLUE_MID, linewidth=2.2, zorder=4)
-    ax.fill_between(x, values, alpha=0.12, color=BLUE_MID, zorder=3)
+    # Sales line (left axis)
+    ax1.plot(x, values, color=BLUE_MID, linewidth=2.2, zorder=4, label="Sales")
+    ax1.fill_between(x, values, alpha=0.12, color=BLUE_MID, zorder=3)
 
     # Dots: weekends in green, weekdays in blue
     for i, (val, is_we) in enumerate(zip(values, weekend_mask)):
         color = ACCENT_TEAL if is_we else BLUE_MID
-        ax.plot(i, val, "o", color=color, markersize=5, zorder=5)
+        ax1.plot(i, val, "o", color=color, markersize=5, zorder=5)
 
-    # Moving average (7-day) if enough data
-    if len(values) >= 7:
-        ma = np.convolve(values, np.ones(7) / 7, mode="valid")
-        ax.plot(
-            np.arange(3, 3 + len(ma)), ma,
-            color=ACCENT_AMB, linewidth=1.5,
-            linestyle="--", alpha=0.8, label="7-day avg",
-        )
-        ax.legend(fontsize=8, framealpha=0.7)
+    ax1.set_ylabel("Sales (IDR)", fontsize=9, color=BLUE_MID)
+    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_idr))
+    ax1.tick_params(axis="y", colors=BLUE_MID)
+    ax1.spines["top"].set_visible(False)
+    ax1.grid(axis="y", color=GRID_COLOR, linewidth=0.8, zorder=0)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, fontsize=7.5, color=TEXT_DARK)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_idr))
+    # Traffic line (right axis)
+    if traffic_vals:
+        ax2 = ax1.twinx()
+        ax2.plot(x, traffic_vals, color=ACCENT_AMB, linewidth=2,
+                 marker="s", markersize=4, zorder=5, alpha=0.85,
+                 label="Traffic")
+        ax2.set_ylabel("Visitor Count", fontsize=9, color=ACCENT_AMB)
+        ax2.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_idr))
+        ax2.tick_params(axis="y", colors=ACCENT_AMB)
+        ax2.spines["top"].set_visible(False)
+
+        # Combined legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2,
+                   fontsize=8, loc="upper left", framealpha=0.7)
+    else:
+        ax1.legend(fontsize=8, loc="upper left", framealpha=0.7)
+        ax1.spines["right"].set_visible(False)
+
+    ax1.spines["left"].set_color(GRID_COLOR)
+    ax1.spines["bottom"].set_color(GRID_COLOR)
+
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(x_labels, fontsize=7.5, color=TEXT_DARK)
 
     m_num = int(target_key.split("-")[1])
     y_num = target_key.split("-")[0]
-    ax.set_title(
-        f"Daily Sales — {cal.month_name[m_num]} {y_num}  ({tenant_name})",
+    ax1.set_title(
+        f"Daily Sales & Traffic — {cal.month_name[m_num]} {y_num}  ({tenant_name})",
         fontsize=13, fontweight="bold", color=BLUE_DARK, pad=12,
     )
-    ax.set_ylabel("Sales (IDR)", fontsize=9, color=TEXT_DARK)
-    ax.set_xlabel("Day of Month", fontsize=9, color=TEXT_DARK)
+    ax1.set_xlabel("Day of Month", fontsize=9, color=TEXT_DARK)
 
-    # Mark highest day
+    # Mark highest sales day
     if values:
         peak_i = int(np.argmax(values))
-        ax.annotate(
+        ax1.annotate(
             f"Peak\n{_fmt_idr(values[peak_i])}",
             xy=(peak_i, values[peak_i]),
             xytext=(peak_i, values[peak_i] + max(values) * 0.08),
