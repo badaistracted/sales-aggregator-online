@@ -330,12 +330,9 @@ def _slide_with_chart(
 
 def _slide_events(prs, events_data: dict, target_key: str, month_label: str):
     """
-    Slide(s): Event Calendar for the month using compact table layout.
-
-    If there are many events, this function automatically creates multiple
-    event slides so events are not cut off.
+    Slide(s): Event Calendar using compact table with merged date cells.
+    Each date appears once — events for that day are listed underneath.
     """
-    # Filter to target month
     all_events = events_data.get("events_flat", [])
 
     if target_key:
@@ -346,7 +343,6 @@ def _slide_events(prs, events_data: dict, target_key: str, month_label: str):
     else:
         target_events = all_events
 
-    # Sort by date, then location, then name
     target_events = sorted(
         target_events,
         key=lambda e: (
@@ -355,6 +351,255 @@ def _slide_events(prs, events_data: dict, target_key: str, month_label: str):
             str(e.get("event_name", "")),
         )
     )
+
+    if not target_events:
+        layout = prs.slide_layouts[6]
+        slide = prs.slides.add_slide(layout)
+        _add_rect(slide, 0, 0, SLIDE_W, SLIDE_H, C_WHITE)
+        _header_bar(slide, "Event Calendar", month_label)
+        _add_textbox(
+            slide, "No events found for this period.",
+            left=Inches(0.4), top=Inches(1.8),
+            width=Inches(10), height=Inches(0.5),
+            font_size=14, color=C_MUTED,
+        )
+        return
+
+    # Group events by date
+    from collections import OrderedDict
+    events_by_date = OrderedDict()
+    for e in target_events:
+        d = e["date"]
+        if d not in events_by_date:
+            events_by_date[d] = []
+        events_by_date[d].append(e)
+
+    # Build flat row list with merge info
+    # Each row: (date_str, location, event_name, is_first_of_date, row_count_for_date)
+    flat_rows = []
+    for date_str, evts in events_by_date.items():
+        for i, evt in enumerate(evts):
+            flat_rows.append({
+                "date": date_str,
+                "location": evt.get("location", ""),
+                "event_name": evt.get("event_name", ""),
+                "is_first": i == 0,
+                "date_row_count": len(evts),
+            })
+
+    # Paginate
+    rows_per_slide = 24
+    chunks = []
+    current_chunk = []
+    current_count = 0
+
+    for row in flat_rows:
+        if current_count >= rows_per_slide and row["is_first"]:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_count = 0
+        current_chunk.append(row)
+        current_count += 1
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    total_pages = len(chunks)
+
+    for page_idx, chunk in enumerate(chunks, start=1):
+        layout = prs.slide_layouts[6]
+        slide = prs.slides.add_slide(layout)
+        _add_rect(slide, 0, 0, SLIDE_W, SLIDE_H, C_WHITE)
+
+        title = "Event Calendar"
+        if total_pages > 1:
+            title = f"Event Calendar ({page_idx}/{total_pages})"
+
+        _header_bar(slide, title, month_label)
+
+        _add_textbox(
+            slide,
+            f"{len(target_events)} event(s) across {len(events_by_date)} day(s)",
+            left=Inches(0.4), top=Inches(1.25),
+            width=Inches(12), height=Inches(0.3),
+            font_size=9, color=C_MUTED, italic=True,
+        )
+
+        # Table
+        table_left = Inches(0.35)
+        table_top = Inches(1.65)
+        table_width = Inches(12.65)
+        table_height = Inches(5.55)
+
+        num_rows = len(chunk) + 1  # +1 header
+        num_cols = 3
+
+        table_shape = slide.shapes.add_table(
+            num_rows, num_cols, table_left, table_top, table_width, table_height
+        )
+        table = table_shape.table
+
+        table.columns[0].width = Inches(1.25)   # Date
+        table.columns[1].width = Inches(1.75)   # Location
+        table.columns[2].width = Inches(9.65)   # Event
+
+        def _set_cell(cell, text, font_size=7, bold=False,
+                      color=C_TEXT, fill=None, align=PP_ALIGN.LEFT):
+            if fill:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = fill
+            tf = cell.text_frame
+            tf.clear()
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.alignment = align
+            run = p.add_run()
+            run.text = str(text)
+            run.font.size = Pt(font_size)
+            run.font.bold = bold
+            run.font.color.rgb = color
+            run.font.name = "Calibri"
+            cell.margin_left = Inches(0.04)
+            cell.margin_right = Inches(0.04)
+            cell.margin_top = Inches(0.02)
+            cell.margin_bottom = Inches(0.02)
+
+        # Header
+        headers = ["Date", "Location", "Event"]
+        for c, h in enumerate(headers):
+            _set_cell(
+                table.cell(0, c), h,
+                font_size=7, bold=True, color=C_WHITE,
+                fill=C_NAVY, align=PP_ALIGN.CENTER,
+            )
+        table.rows[0].height = Inches(0.28)
+
+        # Data rows
+        row_idx = 1
+        date_merge_start = {}  # tracks merge start row for each date group
+
+        for row_data in chunk:
+            try:
+                dt = datetime.strptime(row_data["date"], "%Y-%m-%d")
+                is_weekend = dt.weekday() >= 5
+            except ValueError:
+                is_weekend = False
+
+            if is_weekend:
+                row_fill = RGBColor(0xE8, 0xF5, 0xE9)
+            else:
+                # Alternate fill based on date group, not row
+                date_group_idx = list(events_by_date.keys()).index(row_data["date"]) \
+                    if row_data["date"] in events_by_date else 0
+                row_fill = (
+                    RGBColor(0xFF, 0xFF, 0xFF) if date_group_idx % 2 == 0
+                    else RGBColor(0xF7, 0xF9, 0xFC)
+                )
+
+            # Date column
+            if row_data["is_first"]:
+                try:
+                    dt = datetime.strptime(row_data["date"], "%Y-%m-%d")
+                    date_label = dt.strftime("%a, %d %b")
+                except ValueError:
+                    date_label = row_data["date"]
+
+                _set_cell(
+                    table.cell(row_idx, 0), date_label,
+                    font_size=7, bold=True, color=C_NAVY,
+                    fill=row_fill, align=PP_ALIGN.CENTER,
+                )
+                date_merge_start[row_data["date"]] = row_idx
+            else:
+                # Empty cell — will be merged later
+                _set_cell(
+                    table.cell(row_idx, 0), "",
+                    fill=row_fill,
+                )
+
+            # Location
+            _set_cell(
+                table.cell(row_idx, 1), row_data["location"],
+                font_size=6.5, color=C_TEXT,
+                fill=row_fill, align=PP_ALIGN.CENTER,
+            )
+
+            # Event name
+            _set_cell(
+                table.cell(row_idx, 2), row_data["event_name"],
+                font_size=6.5, color=C_TEXT,
+                fill=row_fill, align=PP_ALIGN.LEFT,
+            )
+
+            table.rows[row_idx].height = Inches(0.22)
+            row_idx += 1
+
+        # Merge date cells for multi-event days
+        for date_str, start_row in date_merge_start.items():
+            row_count = events_by_date[date_str] if date_str in events_by_date else []
+            # Only count rows in THIS chunk for this date
+            chunk_rows_for_date = sum(
+                1 for r in chunk if r["date"] == date_str
+            )
+            if chunk_rows_for_date > 1:
+                end_row = start_row + chunk_rows_for_date - 1
+                try:
+                    cell_a = table.cell(start_row, 0)
+                    cell_b = table.cell(end_row, 0)
+                    cell_a.merge(cell_b)
+
+                    # Re-style the merged cell
+                    try:
+                        dt = datetime.strptime(date_str, "%Y-%m-%d")
+                        date_label = dt.strftime("%a, %d %b")
+                        is_weekend = dt.weekday() >= 5
+                    except ValueError:
+                        date_label = date_str
+                        is_weekend = False
+
+                    if is_weekend:
+                        merge_fill = RGBColor(0xE8, 0xF5, 0xE9)
+                    else:
+                        date_group_idx = list(events_by_date.keys()).index(date_str) \
+                            if date_str in events_by_date else 0
+                        merge_fill = (
+                            RGBColor(0xFF, 0xFF, 0xFF) if date_group_idx % 2 == 0
+                            else RGBColor(0xF7, 0xF9, 0xFC)
+                        )
+
+                    cell_a.fill.solid()
+                    cell_a.fill.fore_color.rgb = merge_fill
+
+                    tf = cell_a.text_frame
+                    tf.clear()
+                    tf.word_wrap = True
+                    p = tf.paragraphs[0]
+                    p.alignment = PP_ALIGN.CENTER
+                    run = p.add_run()
+                    run.text = date_label
+                    run.font.size = Pt(7.5)
+                    run.font.bold = True
+                    run.font.color.rgb = C_NAVY
+                    run.font.name = "Calibri"
+
+                    # Vertical center
+                    cell_a.vertical_anchor = 1  # MSO_ANCHOR.MIDDLE
+                except Exception:
+                    pass  # Merge failed — skip silently
+
+        # Footer
+        _add_rect(slide, 0, SLIDE_H - Inches(0.32), SLIDE_W, Inches(0.32), C_LIGHT)
+
+        chunk_start = sum(len(c) for c in chunks[:page_idx - 1]) + 1
+        chunk_end = chunk_start + len(chunk) - 1
+
+        _add_textbox(
+            slide,
+            f"Rows {chunk_start}–{chunk_end} of {len(flat_rows)}",
+            left=Inches(0.35), top=SLIDE_H - Inches(0.29),
+            width=Inches(8), height=Inches(0.25),
+            font_size=7.5, color=C_MUTED,
+        )
 
     # Helper to create an empty event slide
     def _new_event_slide(page_num=1, total_pages=1):
