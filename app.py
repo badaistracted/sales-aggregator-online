@@ -2764,7 +2764,11 @@ def export_pptx():
         }
 
         # ── Step 4: Assemble PowerPoint ────────────────────────
-        pptx_buf = build_pptx(kpis, llm_text, charts, month_label, events_data=events_data,)
+        pptx_buf = build_pptx(
+        kpis, llm_text, charts, month_label,
+        target_key=target_key,
+        events_data=events_data,
+    )
 
         # ── Step 5: Return file ────────────────────────────────
         month_abbr = cal.month_abbr[target_month]
