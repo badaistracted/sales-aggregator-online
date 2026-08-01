@@ -821,13 +821,11 @@ def build_pptx(
         daily_sales     — daily line chart
     """
     prs = Presentation()
-    prs.slide_width  = SLIDE_W
+    prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
 
-    from datetime import timedelta
-
-generated_at = (datetime.now() + timedelta(hours=7)).strftime("%d %B %Y, %H:%M")
-
+    # If server runs in UTC and you want local time = UTC+5
+    generated_at = (datetime.utcnow() + timedelta(hours=5)).strftime("%d %B %Y, %H:%M")
 
     # ── Slide 1: Cover ────────────────────────────────────────
     _slide_cover(prs, month_label, generated_at)
