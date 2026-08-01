@@ -119,16 +119,18 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
 
     # ── Event Impact KPIs ─────────────────────────────────────
     event_impact = []
+    avg_event = 0
+    avg_non_event = 0
+    event_day_sales = []
+    non_event_day_sales = []
+
     if events_data and events_data.get("daily"):
-        # Build event lookup: date → list of event names
+        # Build event lookup: date -> list of event names
         event_dates = {}
         for ed in events_data["daily"]:
             event_dates[ed["date"]] = ed.get("events", [])
 
         # Split sales into event days vs non-event days
-        event_day_sales = []
-        non_event_day_sales = []
-
         for date_str, sales_val in by_date.items():
             if date_str in event_dates and event_dates[date_str]:
                 event_day_sales.append({
@@ -148,7 +150,6 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
             if event_day_sales else 0
         )
 
-        # Rank event days by sales uplift vs non-event average
         for ed in event_day_sales:
             uplift = ed["sales"] - avg_non_event
             uplift_pct = (
@@ -163,7 +164,7 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
             })
 
         event_impact.sort(key=lambda x: x["sales"], reverse=True)
-                    
+
     return {
         # Identity
         "month_label"         : month_label,
@@ -200,19 +201,12 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
         "avg_weekend_sales"   : avg_weekend,
         "daily_days_tracked"  : len(by_date),
 
-        # Initialize event defaults
-    event_impact = []
-    avg_event = 0
-    avg_non_event = 0
-    event_day_sales = []
-    non_event_day_sales = []
-
         # Event impact
         "event_impact"        : event_impact,
-        "avg_event_day_sales" : avg_event if event_impact else 0,
-        "avg_non_event_sales" : avg_non_event if event_impact else 0,
-        "event_days_count"    : len(event_day_sales) if event_impact else 0,
-        "non_event_days_count": len(non_event_day_sales) if event_impact else 0,
+        "avg_event_day_sales" : avg_event,
+        "avg_non_event_sales" : avg_non_event,
+        "event_days_count"    : len(event_day_sales),
+        "non_event_days_count": len(non_event_day_sales),
     }
 
 
