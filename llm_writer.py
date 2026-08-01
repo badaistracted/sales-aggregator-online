@@ -20,7 +20,8 @@ def _fmt(v: float) -> str:
 
 
 def _build_kpis(master_data: dict, traffic_data: dict | None,
-                target_year: int, target_month: int) -> dict:
+                target_year: int, target_month: int,
+                events_data: dict | None = None) -> dict:
     """
     Compute all KPIs from parsed data.
     This is pure Python — no LLM involved here.
@@ -116,6 +117,53 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
     avg_weekday = sum(weekday_sales) / len(weekday_sales) if weekday_sales else 0
     avg_weekend = sum(weekend_sales) / len(weekend_sales) if weekend_sales else 0
 
+    # ── Event Impact KPIs ─────────────────────────────────────
+    event_impact = []
+    if events_data and events_data.get("daily"):
+        # Build event lookup: date → list of event names
+        event_dates = {}
+        for ed in events_data["daily"]:
+            event_dates[ed["date"]] = ed.get("events", [])
+
+        # Split sales into event days vs non-event days
+        event_day_sales = []
+        non_event_day_sales = []
+
+        for date_str, sales_val in by_date.items():
+            if date_str in event_dates and event_dates[date_str]:
+                event_day_sales.append({
+                    "date": date_str,
+                    "sales": sales_val,
+                    "events": event_dates[date_str],
+                })
+            else:
+                non_event_day_sales.append(sales_val)
+
+        avg_non_event = (
+            sum(non_event_day_sales) / len(non_event_day_sales)
+            if non_event_day_sales else 0
+        )
+        avg_event = (
+            sum(d["sales"] for d in event_day_sales) / len(event_day_sales)
+            if event_day_sales else 0
+        )
+
+        # Rank event days by sales uplift vs non-event average
+        for ed in event_day_sales:
+            uplift = ed["sales"] - avg_non_event
+            uplift_pct = (
+                (uplift / avg_non_event * 100) if avg_non_event > 0 else 0
+            )
+            event_impact.append({
+                "date": ed["date"],
+                "sales": ed["sales"],
+                "events": ed["events"],
+                "uplift": uplift,
+                "uplift_pct": uplift_pct,
+            })
+
+        event_impact.sort(key=lambda x: x["sales"], reverse=True)
+                    
     return {
         # Identity
         "month_label"         : month_label,
@@ -151,6 +199,20 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
         "avg_weekday_sales"   : avg_weekday,
         "avg_weekend_sales"   : avg_weekend,
         "daily_days_tracked"  : len(by_date),
+
+        # Initialize event defaults
+        event_impact = []
+        avg_event = 0
+        avg_non_event = 0
+        event_day_sales = []
+        non_event_day_sales = []
+
+        # Event impact
+        "event_impact"        : event_impact,
+        "avg_event_day_sales" : avg_event if event_impact else 0,
+        "avg_non_event_sales" : avg_non_event if event_impact else 0,
+        "event_days_count"    : len(event_day_sales) if event_impact else 0,
+        "non_event_days_count": len(non_event_day_sales) if event_impact else 0,
     }
 
 
