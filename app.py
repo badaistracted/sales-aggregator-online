@@ -2759,7 +2759,11 @@ def export_pptx():
                                  target_key,
                              ) if traffic_data else None,
 
-            "daily_sales"  : chart_daily_sales(all_daily, target_key)
+            "daily_sales"  : chart_daily_sales(
+                                 all_daily,
+                                 target_key,
+                                 traffic_daily=traffic_data.get("daily", []) if traffic_data else None,
+                             )
                              if all_daily else None,
         }
 
