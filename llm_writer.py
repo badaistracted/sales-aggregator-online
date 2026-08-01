@@ -201,11 +201,11 @@ def _build_kpis(master_data: dict, traffic_data: dict | None,
         "daily_days_tracked"  : len(by_date),
 
         # Initialize event defaults
-        event_impact = []
-        avg_event = 0
-        avg_non_event = 0
-        event_day_sales = []
-        non_event_day_sales = []
+    event_impact = []
+    avg_event = 0
+    avg_non_event = 0
+    event_day_sales = []
+    non_event_day_sales = []
 
         # Event impact
         "event_impact"        : event_impact,
