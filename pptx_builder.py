@@ -12,6 +12,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 
 # ── Slide dimensions (16:9 widescreen) ────────────────────────
@@ -163,7 +164,7 @@ def _slide_cover(prs, month_label: str, generated_at: str):
 
     # Mall name / logo placeholder
     _add_textbox(
-        slide, "🏬  MALL MANAGEMENT",
+        slide, "MALL MANAGEMENT",
         left=Inches(0.5), top=Inches(1.5),
         width=Inches(10), height=Inches(0.7),
         font_size=14, color=RGBColor(0xA9, 0xCC, 0xE3),
@@ -172,7 +173,7 @@ def _slide_cover(prs, month_label: str, generated_at: str):
 
     # Main title
     _add_textbox(
-        slide, "Monthly Performance Report",
+        slide, "K Square Monthly Performance Report",
         left=Inches(0.5), top=Inches(2.2),
         width=Inches(11), height=Inches(1.2),
         font_size=40, bold=True, color=C_WHITE,
@@ -823,7 +824,10 @@ def build_pptx(
     prs.slide_width  = SLIDE_W
     prs.slide_height = SLIDE_H
 
-    generated_at = datetime.now().strftime("%d %B %Y, %H:%M")
+    from datetime import timedelta
+
+generated_at = (datetime.now() + timedelta(hours=7)).strftime("%d %B %Y, %H:%M")
+
 
     # ── Slide 1: Cover ────────────────────────────────────────
     _slide_cover(prs, month_label, generated_at)
