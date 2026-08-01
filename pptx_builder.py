@@ -825,7 +825,7 @@ def build_pptx(
     prs.slide_height = SLIDE_H
 
     # If server runs in UTC and you want local time = UTC+5
-    generated_at = (datetime.utcnow() + timedelta(hours=5)).strftime("%d %B %Y, %H:%M")
+    generated_at = (datetime.utcnow() + timedelta(hours=7)).strftime("%d %B %Y, %H:%M")
 
     # ── Slide 1: Cover ────────────────────────────────────────
     _slide_cover(prs, month_label, generated_at)
