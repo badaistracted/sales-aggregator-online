@@ -328,102 +328,203 @@ def _slide_with_chart(
     return slide
 
 def _slide_events(prs, events_data: dict, target_key: str, month_label: str):
-    """Slide: Event Calendar for the month."""
-    layout = prs.slide_layouts[6]
-    slide = prs.slides.add_slide(layout)
-    _add_rect(slide, 0, 0, SLIDE_W, SLIDE_H, C_WHITE)
-    _header_bar(slide, "Event Calendar", month_label)
+    """
+    Slide(s): Event Calendar for the month using compact table layout.
 
+    If there are many events, this function automatically creates multiple
+    event slides so events are not cut off.
+    """
     # Filter to target month
-    target_events = [e for e in events_data.get("events_flat", [])
-                     if e["date"].startswith(target_key)]
+    all_events = events_data.get("events_flat", [])
 
-    if not target_events:
+    if target_key:
+        target_events = [
+            e for e in all_events
+            if str(e.get("date", "")).startswith(target_key)
+        ]
+    else:
+        target_events = all_events
+
+    # Sort by date, then location, then name
+    target_events = sorted(
+        target_events,
+        key=lambda e: (
+            str(e.get("date", "")),
+            str(e.get("location", "")),
+            str(e.get("event_name", "")),
+        )
+    )
+
+    # Helper to create an empty event slide
+    def _new_event_slide(page_num=1, total_pages=1):
+        layout = prs.slide_layouts[6]
+        slide = prs.slides.add_slide(layout)
+        _add_rect(slide, 0, 0, SLIDE_W, SLIDE_H, C_WHITE)
+
+        title = "Event Calendar"
+        if total_pages > 1:
+            title = f"Event Calendar ({page_num}/{total_pages})"
+
+        _header_bar(slide, title, month_label)
+
         _add_textbox(
-            slide, "No events found for this period.",
-            left=Inches(0.4), top=Inches(1.5),
+            slide,
+            f"{len(target_events)} event(s) in this period",
+            left=Inches(0.4), top=Inches(1.25),
+            width=Inches(12), height=Inches(0.3),
+            font_size=9, color=C_MUTED, italic=True,
+        )
+
+        return slide
+
+    # No events
+    if not target_events:
+        slide = _new_event_slide()
+        _add_textbox(
+            slide,
+            "No events found for this period.",
+            left=Inches(0.4), top=Inches(1.8),
             width=Inches(10), height=Inches(0.5),
             font_size=14, color=C_MUTED,
         )
         return
 
-    # Group by date
-    events_by_date = defaultdict(list)
-    for e in target_events:
-        try:
-            dt = datetime.strptime(e["date"], "%Y-%m-%d")
-            label = dt.strftime("%a, %d %b")
-        except ValueError:
-            label = e["date"]
-        events_by_date[label].append(e)
+    # Compact table settings
+    rows_per_slide = 22
 
-    # Build a scrollable-looking list
-    # Left column: date cards
-    date_list = sorted(events_by_date.keys())
+    chunks = [
+        target_events[i:i + rows_per_slide]
+        for i in range(0, len(target_events), rows_per_slide)
+    ]
 
-    # Title showing event count
-    _add_textbox(
-        slide,
-        f"{len(target_events)} events across {len(date_list)} day(s)",
-        left=Inches(0.4), top=Inches(1.3),
-        width=Inches(10), height=Inches(0.35),
-        font_size=11, color=C_MUTED, italic=True,
-    )
+    total_pages = len(chunks)
 
-    # Simplified layout: 2-column grid of event cards
-    card_w = Inches(5.9)
-    card_h = Inches(1.6)
-    gap_x = Inches(0.35)
-    gap_y = Inches(0.2)
+    for page_idx, chunk in enumerate(chunks, start=1):
+        slide = _new_event_slide(page_idx, total_pages)
 
-    cols = 2
-    start_x = Inches(0.3)
-    start_y = Inches(1.75)
+        # Table placement
+        left = Inches(0.35)
+        top = Inches(1.65)
+        width = Inches(12.65)
+        height = Inches(5.55)
 
-    for i, (date_label, evts) in enumerate(events_by_date.items()):
-        col = i % cols
-        row_idx = i // cols
+        rows = len(chunk) + 1  # +1 header row
+        cols = 3
 
-        left = start_x + col * (card_w + gap_x)
-        top = start_y + row_idx * (card_h + gap_y)
+        table_shape = slide.shapes.add_table(
+            rows, cols, left, top, width, height
+        )
+        table = table_shape.table
 
-        if top + card_h > Inches(7.2):
-            break  # Don't overflow the slide
+        # Column widths
+        table.columns[0].width = Inches(1.25)   # Date
+        table.columns[1].width = Inches(1.75)   # Location
+        table.columns[2].width = Inches(9.65)   # Event name
 
-        # Card background
-        _add_rect(slide, left, top, card_w, card_h, RGBColor(0xF4, 0xF6, 0xF9))
+        # Row heights
+        table.rows[0].height = Inches(0.28)
+        for r in range(1, rows):
+            table.rows[r].height = Inches(0.24)
 
-        # Date header
+        # Helper to style cells
+        def _set_table_cell(cell, text, font_size=7, bold=False,
+                            color=C_TEXT, fill=None, align=PP_ALIGN.LEFT):
+            if fill:
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = fill
+
+            tf = cell.text_frame
+            tf.clear()
+            tf.word_wrap = True
+
+            p = tf.paragraphs[0]
+            p.alignment = align
+
+            run = p.add_run()
+            run.text = str(text)
+            run.font.size = Pt(font_size)
+            run.font.bold = bold
+            run.font.color.rgb = color
+            run.font.name = "Calibri"
+
+            # Small inner margins for compact layout
+            cell.margin_left = Inches(0.04)
+            cell.margin_right = Inches(0.04)
+            cell.margin_top = Inches(0.02)
+            cell.margin_bottom = Inches(0.02)
+
+        # Header row
+        headers = ["Date", "Location", "Event"]
+        for c, h in enumerate(headers):
+            _set_table_cell(
+                table.cell(0, c),
+                h,
+                font_size=7,
+                bold=True,
+                color=C_WHITE,
+                fill=C_NAVY,
+                align=PP_ALIGN.CENTER,
+            )
+
+        # Data rows
+        for i, evt in enumerate(chunk, start=1):
+            raw_date = str(evt.get("date", ""))
+            try:
+                dt = datetime.strptime(raw_date, "%Y-%m-%d")
+                date_label = dt.strftime("%d-%b")
+                is_weekend = dt.weekday() >= 5
+            except ValueError:
+                date_label = raw_date
+                is_weekend = False
+
+            location = evt.get("location", "") or "-"
+            event_name = evt.get("event_name", "") or "-"
+
+            # Alternating row colors; weekends lightly green
+            if is_weekend:
+                row_fill = RGBColor(0xE8, 0xF5, 0xE9)
+            else:
+                row_fill = RGBColor(0xFF, 0xFF, 0xFF) if i % 2 else RGBColor(0xF7, 0xF9, 0xFC)
+
+            _set_table_cell(
+                table.cell(i, 0),
+                date_label,
+                font_size=6.5,
+                bold=is_weekend,
+                color=C_TEXT,
+                fill=row_fill,
+                align=PP_ALIGN.CENTER,
+            )
+
+            _set_table_cell(
+                table.cell(i, 1),
+                location,
+                font_size=6.3,
+                color=C_TEXT,
+                fill=row_fill,
+                align=PP_ALIGN.CENTER,
+            )
+
+            _set_table_cell(
+                table.cell(i, 2),
+                event_name,
+                font_size=6.3,
+                color=C_TEXT,
+                fill=row_fill,
+                align=PP_ALIGN.LEFT,
+            )
+
+        # Footer
+        _add_rect(slide, 0, SLIDE_H - Inches(0.32), SLIDE_W, Inches(0.32), C_LIGHT)
         _add_textbox(
-            slide, date_label,
-            left=left + Inches(0.1), top=top + Inches(0.05),
-            width=card_w - Inches(0.2), height=Inches(0.3),
-            font_size=9, bold=True, color=C_NAVY,
+            slide,
+            f"Events shown: {((page_idx - 1) * rows_per_slide) + 1}"
+            f"–{((page_idx - 1) * rows_per_slide) + len(chunk)}"
+            f" of {len(target_events)}",
+            left=Inches(0.35), top=SLIDE_H - Inches(0.29),
+            width=Inches(8), height=Inches(0.25),
+            font_size=7.5, color=C_MUTED,
         )
-
-        # Event list
-        event_text = "\n".join(
-            f"• {e['event_name'][:80]}  ({e['location']})"
-            for e in evts[:5]
-        )
-        if len(evts) > 5:
-            event_text += f"\n... +{len(evts) - 5} more"
-
-        _add_textbox(
-            slide, event_text,
-            left=left + Inches(0.1), top=top + Inches(0.38),
-            width=card_w - Inches(0.2), height=card_h - Inches(0.5),
-            font_size=8, color=C_TEXT, wrap=True,
-        )
-
-    # Bottom strip
-    _add_rect(slide, 0, SLIDE_H - Inches(0.35), SLIDE_W, Inches(0.35), C_LIGHT)
-    _add_textbox(
-        slide, f"Event count: {len(target_events)}",
-        left=Inches(0.3), top=SLIDE_H - Inches(0.33),
-        width=Inches(10), height=Inches(0.3),
-        font_size=8, color=C_MUTED,
-    )
     
 def _slide_recommendations(prs, recommendations: list[str], month_label: str):
     """Last slide — Recommendations."""
