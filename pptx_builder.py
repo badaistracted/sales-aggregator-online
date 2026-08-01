@@ -494,10 +494,11 @@ def _slide_recommendations(prs, recommendations: list[str], month_label: str):
 # ── Main assembler ─────────────────────────────────────────────
 
 def build_pptx(
-    kpis       : dict,
-    llm_text   : dict,
-    charts     : dict,        # {"monthly_sales": BytesIO, "top_tenants": BytesIO, ...}
-    month_label: str,
+    kpis,
+    llm_text,
+    charts,
+    month_label,
+    target_key=None,
     events_data=None,
 ) -> io.BytesIO:
     """
@@ -579,7 +580,7 @@ def build_pptx(
 
     # ── Slide 7: Events Calendar ──────────────────────────────
     if events_data and events_data.get("events_flat"):
-        _slide_events(prs, events_data, None, month_label)
+        _slide_events(prs, events_data, target_key, month_label)
 
     # ── Slide 8: Recommendations ─────────────────────────────
     _slide_recommendations(
