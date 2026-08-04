@@ -1406,7 +1406,7 @@ HTML_UI = r"""
         <i data-lucide="building-2" style="width: 32px; height: 32px; color: var(--accent-primary);"></i>
         <div>
             <h1>Tenant Report Reader</h1>
-            <div class="subtitle" style="margin:0">Automated reporting pipeline: parse uploads into unified Excel formats &amp; PPTX dashboards.</div>
+            <div class="subtitle" style="margin:0">Automated Excel reporting and PPT dashboard generation from uploaded files</div>
         </div>
     </div>
 
