@@ -1414,7 +1414,7 @@ HTML_UI = r"""
     <div class="config-card">
         <div class="config-title">
             <i data-lucide="calendar" style="width: 16px; height: 16px;"></i>
-            Reporting Period Configuration
+            Report Period
         </div>
         <div class="config-row">
             <div class="config-group">
