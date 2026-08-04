@@ -1474,7 +1474,7 @@ HTML_UI = r"""
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px">
                 <div class="config-title" style="margin-bottom:0">
                     <i data-lucide="layout-grid" style="width: 16px; height: 16px;"></i>
-                    Unified Management Matrix
+                    Preview
                 </div>
                 <div style="display:flex;gap:10px;flex-wrap:wrap">
                     <button class="browse-btn btn-secondary" id="exportBtn" onclick="exportExcel()">
@@ -1496,7 +1496,7 @@ HTML_UI = r"""
     <div class="file-list-header" id="fileListHeader" style="display:none">
         <div class="file-list-title">
             <i data-lucide="layers" style="width: 16px; height: 16px; color: var(--text-muted);"></i>
-            Data Input Processing Status
+            Processed Files
         </div>
         <button class="browse-btn btn-clear" onclick="clearAll()">
             <i data-lucide="rotate-ccw" style="width: 12px; height: 12px;"></i> Clear Queue
