@@ -1013,225 +1013,375 @@ def parse_report(data, ext, filename):
 #  HTML UI
 # ══════════════════════════════════════════════════════════════
 
+# HTML UI (Updated for professional consistency, integrated dropzone, and Lucide icons)
 HTML_UI = r"""
 <!DOCTYPE html>
 <html>
 <head>
     <title>Tenant Report Reader</title>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body {
-            font-family: sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
-            padding: 40px;
-            margin: 0;
+        :root {
+            --bg-base: #0f172a;
+            --bg-surface: #1e293b;
+            --bg-subtle: #263248;
+            --accent-primary: #3b82f6;
+            --accent-primary-hover: #2563eb;
+            --accent-secondary: #7c3aed;
+            --accent-secondary-hover: #6d28d9;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
         }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-base);
+            color: var(--text-main);
+            padding: 40px 20px;
+            margin: 0;
+            line-height: 1.5;
+        }
+        
         .container { max-width: 1200px; margin: 0 auto; }
-        h1 { margin-bottom: 5px; }
-        .subtitle { color: #94a3b8; margin-bottom: 25px; }
+        
+        .header-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+        
+        h1 { margin: 0; font-size: 1.85rem; font-weight: 700; color: #fff; }
+        .subtitle { color: var(--text-muted); margin-top: 4px; margin-bottom: 25px; font-size: 0.95rem; }
 
         .config-card {
-            background: #1e293b;
-            border: 1px solid #334155;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
             border-radius: 12px;
-            padding: 20px;
+            padding: 24px;
             margin-bottom: 20px;
         }
+
         .config-title {
-            font-size: 1rem;
+            font-size: 0.9rem;
             font-weight: 600;
             color: #93c5fd;
-            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
-        .config-row { display: flex; gap: 15px; align-items: flex-end; flex-wrap: wrap; }
-        .config-group label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 5px; }
+
+        .config-row { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .config-group { display: flex; flex-direction: column; gap: 6px; }
+        .config-group label { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+        
         .config-group select, .config-group input[type="number"] {
-            background: #263248; border: 1px solid #475569; border-radius: 8px;
-            color: #e2e8f0; padding: 8px 12px; font-size: 0.95rem; outline: none;
+            background: var(--bg-subtle); 
+            border: 1px solid var(--border-color); 
+            border-radius: 8px;
+            color: var(--text-main); 
+            padding: 10px 14px; 
+            font-size: 0.9rem; 
+            outline: none;
+            transition: border-color 0.2s;
         }
-        .config-group select option { background: #1e293b; }
-        .month-preview { font-size: 0.85rem; color: #94a3b8; padding: 8px 0; }
-        .month-preview b { color: #3b82f6; }
+        .config-group select:focus, .config-group input[type="number"]:focus {
+            border-color: var(--accent-primary);
+        }
+        
+        .month-preview { 
+            font-size: 0.9rem; 
+            color: var(--text-muted); 
+            background: rgba(59, 130, 246, 0.08);
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            padding: 10px 16px;
+            border-radius: 8px;
+            margin-left: auto;
+        }
+        .month-preview b { color: var(--accent-primary); }
 
+        /* Integrated Dropzone Container */
         .drop-zone {
-            border: 3px dashed #3b82f6; border-radius: 20px; padding: 50px;
-            text-align: center; cursor: pointer;
-            background: rgba(59, 130, 246, 0.05); transition: 0.3s;
+            border: 2px dashed #475569; 
+            border-radius: 16px; 
+            padding: 48px 32px;
+            text-align: center; 
+            cursor: pointer;
+            background: rgba(30, 41, 59, 0.4); 
+            transition: all 0.2s ease-in-out;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
         }
-        .drop-zone.hover {
-            background: rgba(59, 130, 246, 0.15);
-            border-color: #60a5fa; transform: scale(1.01);
+        .drop-zone:hover, .drop-zone.hover {
+            border-color: var(--accent-primary);
+            background: rgba(59, 130, 246, 0.03);
+            transform: scale(1.005);
         }
-        .drop-zone .icon { font-size: 3rem; margin-bottom: 10px; }
-        .drop-zone p { color: #94a3b8; margin: 5px 0; }
-        .drop-zone b { color: #93c5fd; }
+        
+        .drop-icon {
+            width: 48px;
+            height: 48px;
+            color: var(--text-muted);
+            transition: color 0.2s;
+        }
+        .drop-zone:hover .drop-icon {
+            color: var(--accent-primary);
+        }
 
-        .browse-row { display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap; }
+        .drop-title { font-size: 1.1rem; font-weight: 600; color: #fff; margin: 0; }
+        .drop-subtitle { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
+
+        .browse-row { display: flex; gap: 12px; margin-top: 10px; justify-content: center; }
+        
         .browse-btn {
-            display: inline-flex; align-items: center; gap: 6px;
-            padding: 10px 20px; border-radius: 10px; font-size: 0.9rem;
-            font-weight: 600; border: none; cursor: pointer; transition: all 0.2s;
+            display: inline-flex; 
+            align-items: center; 
+            gap: 8px;
+            padding: 10px 18px; 
+            border-radius: 8px; 
+            font-size: 0.85rem;
+            font-weight: 600; 
+            border: none; 
+            cursor: pointer; 
+            transition: all 0.15s ease-in-out;
         }
-        .browse-btn:hover { transform: translateY(-1px); }
-        .btn-files { background: #3b82f6; color: #fff; }
-        .btn-files:hover { background: #2563eb; }
-        .btn-folder { background: #10b981; color: #fff; }
-        .btn-folder:hover { background: #059669; }
-        .btn-clear { background: transparent; color: #94a3b8; border: 1px solid #475569; }
-        .btn-clear:hover { background: #263248; }
+        .browse-btn:active { transform: translateY(1px); }
+        
+        .btn-primary { background: var(--accent-primary); color: #fff; }
+        .btn-primary:hover { background: var(--accent-primary-hover); }
+        
+        .btn-secondary { 
+            background: transparent; 
+            color: var(--text-muted); 
+            border: 1px solid var(--border-color); 
+        }
+        .btn-secondary:hover { 
+            background: var(--bg-subtle); 
+            color: var(--text-main);
+            border-color: #475569;
+        }
+        
+        .btn-clear { 
+            background: transparent; 
+            color: var(--danger); 
+            border: 1px solid rgba(239, 68, 68, 0.2); 
+            padding: 8px 14px;
+            font-size: 0.8rem;
+        }
+        .btn-clear:hover { 
+            background: rgba(239, 68, 68, 0.08); 
+            border-color: var(--danger);
+        }
+        
         .hidden-input { display: none; }
 
         .loader {
-            display: none; text-align: center; color: #3b82f6;
-            font-weight: bold; margin-top: 15px; padding: 15px;
+            display: none; text-align: center; color: var(--accent-primary);
+            font-weight: 600; margin-top: 25px; padding: 20px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
         }
         .spinner {
-            display: inline-block; width: 14px; height: 14px;
-            border: 2px solid #3b82f6; border-top: 2px solid transparent;
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid var(--accent-primary); border-top: 2px solid transparent;
             border-radius: 50%; animation: spin 0.6s linear infinite;
-            margin-right: 8px; vertical-align: middle;
+            margin-right: 10px; vertical-align: middle;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .summary { margin-top: 20px; display: none; }
-        .summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+        /* Summary Dashboard */
+        .summary { margin-top: 25px; display: none; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
         .summary-card {
-            background: #1e293b; border: 1px solid #334155;
-            padding: 15px; border-radius: 10px; text-align: center;
+            background: var(--bg-surface); 
+            border: 1px solid var(--border-color);
+            padding: 20px; 
+            border-radius: 12px; 
+            display: flex;
+            align-items: center;
+            gap: 16px;
         }
-        .summary-card .num { font-size: 1.5rem; font-weight: bold; }
-        .summary-card .label { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
-        .c-blue { color: #3b82f6; } .c-green { color: #10b981; }
-        .c-red { color: #ef4444; } .c-yellow { color: #f59e0b; }
-        .c-purple { color: #a78bfa; }
+        .summary-card-icon {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .summary-card-info { display: flex; flex-direction: column; }
+        .summary-card .num { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+        .summary-card .label { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em; }
+        
+        .c-blue { color: var(--accent-primary); } 
+        .c-green { color: var(--success); }
+        .c-red { color: var(--danger); } 
+        .c-yellow { color: var(--warning); }
+        .c-purple { color: var(--accent-secondary); }
 
-        /* Master Report */
-        .master { margin-top: 20px; display: none; }
+        /* Master Report Table */
+        .master { margin-top: 25px; display: none; }
         .master-warn {
-            background: rgba(245,158,11,0.08);
-            border: 1px solid rgba(245,158,11,0.25);
-            color: #fde68a; padding: 10px 14px; border-radius: 8px;
-            font-size: 0.85em; margin-bottom: 12px; display: none;
+            background: rgba(245,158,11,0.06);
+            border: 1px solid rgba(245,158,11,0.2);
+            color: #fef08a; padding: 12px 16px; border-radius: 8px;
+            font-size: 0.85rem; margin-bottom: 16px; display: none;
         }
-        .master-table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid #334155; }
-        .master-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        .master-table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border-color); }
+        .master-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
         .master-table th {
-            background: #1a3a5c; color: #93c5fd; padding: 8px 12px;
+            background: #141b2d; color: #93c5fd; padding: 12px 16px;
             text-align: right; font-weight: 600; white-space: nowrap;
-            border-bottom: 2px solid #2563eb;
+            border-bottom: 2px solid var(--accent-primary);
         }
         .master-table th:first-child, .master-table td:first-child { text-align: left; }
         .master-table td {
-            padding: 7px 12px; border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.04);
             color: #cbd5e1; text-align: right; white-space: nowrap;
         }
-        .master-table tr:hover td { background: rgba(59,130,246,0.06); }
-        .master-table .t-col { background: rgba(59,130,246,0.12); }
-        .master-table .t-head { background: rgba(37,99,235,0.35); color: #fff; }
+        .master-table tr:hover td { background: rgba(59,130,246,0.04); }
+        .master-table .t-col { background: rgba(59,130,246,0.08); }
+        .master-table .t-head { background: rgba(37,99,235,0.25); color: #fff; }
         .master-table .total-row td {
-            background: rgba(59,130,246,0.1); font-weight: 700;
-            border-top: 2px solid #3b82f6;
+            background: rgba(59,130,246,0.12); font-weight: 700;
+            border-top: 2px solid var(--accent-primary);
+            color: #fff;
         }
-        .master-table .src { font-size: 0.75em; color: #64748b; }
-        .master-table .no-data { color: #334155; }
+        .master-table .src { font-size: 0.75rem; color: var(--text-muted); }
+        .master-table .no-data { color: #475569; }
 
-        /* File Cards */
-        .file-list { margin-top: 20px; }
-        .file-card {
-            background: #1e293b; border: 1px solid #334155;
-            border-radius: 12px; margin-bottom: 12px; overflow: hidden;
+        /* Unified File Cards */
+        .file-list-header {
+            margin-top: 30px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        .file-card.mismatch { border-color: #ef4444; }
-        .file-card.matched { border-color: #10b981; }
-        .file-card.warning { border-color: #f59e0b; }
+        .file-list-title { font-size: 0.95rem; font-weight: 600; color: var(--text-main); display: flex; align-items: center; gap: 8px; }
+        .file-list { margin-top: 10px; }
+        
+        .file-card {
+            background: var(--bg-surface); 
+            border: 1px solid var(--border-color);
+            border-radius: 12px; 
+            margin-bottom: 12px; 
+            overflow: hidden;
+            transition: border-color 0.2s;
+        }
+        .file-card.mismatch { border-color: var(--danger); }
+        .file-card.matched { border-color: var(--success); }
+        .file-card.warning { border-color: var(--warning); }
+        
         .file-header {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 12px 15px; cursor: pointer; transition: background 0.2s;
+            padding: 14px 20px; cursor: pointer; transition: background 0.15s;
         }
-        .file-header:hover { background: #263248; }
-        .file-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .file-header:hover { background: var(--bg-subtle); }
+        .file-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
         .badge {
-            font-size: 0.7em; padding: 3px 8px; border-radius: 4px;
-            font-weight: bold; letter-spacing: 0.5px;
+            font-size: 0.7rem; padding: 4px 8px; border-radius: 4px;
+            font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
         }
-        .b-xlsx { background: #2563eb; color: #fff; }
-        .b-xls  { background: #7c3aed; color: #fff; }
-        .b-pdf  { background: #f59e0b; color: #000; }
-        .b-ok   { background: rgba(16,185,129,0.2); color: #10b981; border: 1px solid #10b981; }
-        .b-fail { background: rgba(239,68,68,0.2); color: #ef4444; border: 1px solid #ef4444; }
-        .b-parse { background: rgba(167,139,250,0.2); color: #a78bfa; border: 1px solid #a78bfa; }
+        .b-xlsx { background: #1e3a8a; color: #93c5fd; }
+        .b-xls  { background: #581c87; color: #e9d5ff; }
+        .b-pdf  { background: #78350f; color: #fde68a; }
+        .b-ok   { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.25); }
+        .b-fail { background: rgba(239,68,68,0.1); color: var(--danger); border: 1px solid rgba(239,68,68,0.25); }
+        .b-parse { background: rgba(167,139,250,0.1); color: #c084fc; border: 1px solid rgba(167,139,250,0.25); }
 
-        .month-badge { font-size: 0.72em; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-        .mb-match { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
-        .mb-mismatch { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
-        .mb-warn { background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
+        .month-badge { font-size: 0.7rem; padding: 4px 8px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+        .mb-match { background: rgba(16,185,129,0.1); color: var(--success); border: 1px solid rgba(16,185,129,0.2); }
+        .mb-mismatch { background: rgba(239,68,68,0.1); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
+        .mb-warn { background: rgba(245,158,11,0.1); color: var(--warning); border: 1px solid rgba(245,158,11,0.2); }
 
-        .row-count { font-size: 0.82em; color: #94a3b8; }
-        .arrow { color: #64748b; transition: transform 0.2s; }
+        .row-count { font-size: 0.8rem; color: var(--text-muted); }
+        .arrow { color: var(--text-muted); transition: transform 0.2s; display: flex; align-items: center; }
         .arrow.open { transform: rotate(180deg); }
 
         .month-bar {
-            padding: 8px 15px; font-size: 0.82em;
+            padding: 10px 20px; font-size: 0.8rem;
             display: flex; align-items: center; gap: 8px;
         }
-        .month-bar.match { background: rgba(16,185,129,0.08); color: #6ee7b7; border-top: 1px solid rgba(16,185,129,0.15); }
-        .month-bar.mismatch { background: rgba(239,68,68,0.08); color: #fca5a5; border-top: 1px solid rgba(239,68,68,0.15); }
-        .month-bar.warn { background: rgba(245,158,11,0.08); color: #fde68a; border-top: 1px solid rgba(245,158,11,0.15); }
-        .month-bar .detected-list { font-size: 0.9em; color: #94a3b8; margin-left: auto; }
+        .month-bar.match { background: rgba(16,185,129,0.04); color: #a7f3d0; border-top: 1px solid rgba(16,185,129,0.1); }
+        .month-bar.mismatch { background: rgba(239,68,68,0.04); color: #fecaca; border-top: 1px solid rgba(239,68,68,0.1); }
+        .month-bar.warn { background: rgba(245,158,11,0.04); color: #fef08a; border-top: 1px solid rgba(245,158,11,0.1); }
+        .month-bar .detected-list { font-size: 0.85em; color: var(--text-muted); margin-left: auto; }
 
         .parse-bar {
-            padding: 6px 15px; font-size: 0.8em; color: #a78bfa;
-            background: rgba(167,139,250,0.06);
-            border-top: 1px solid rgba(167,139,250,0.12);
+            padding: 8px 20px; font-size: 0.8rem; color: #d8b4fe;
+            background: rgba(167,139,250,0.03);
+            border-top: 1px solid rgba(167,139,250,0.08);
+            display: flex; align-items: center; gap: 6px;
         }
 
         .preview-area {
-            display: none; border-top: 1px solid #334155;
-            max-height: 500px; overflow: auto; background: #0c1222;
+            display: none; border-top: 1px solid var(--border-color);
+            max-height: 500px; overflow: auto; background: #0b0f19;
         }
         .data-table {
-            width: 100%; border-collapse: collapse; font-size: 0.8em;
-            font-family: "Consolas", "Courier New", monospace;
+            width: 100%; border-collapse: collapse; font-size: 0.78rem;
+            font-family: Menlo, Monaco, Consolas, monospace;
         }
         .data-table th {
-            background: #1a3a5c; color: #93c5fd; padding: 6px 10px;
+            background: #141b2d; color: #93c5fd; padding: 8px 12px;
             text-align: left; font-weight: 600; position: sticky; top: 0;
-            z-index: 1; border-bottom: 2px solid #2563eb; white-space: nowrap;
+            z-index: 1; border-bottom: 2px solid var(--accent-primary); white-space: nowrap;
         }
         .data-table td {
-            padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding: 6px 12px; border-bottom: 1px solid rgba(255,255,255,0.03);
             color: #cbd5e1; white-space: nowrap;
         }
-        .data-table tr:hover td { background: rgba(59, 130, 246, 0.08); }
+        .data-table tr:hover td { background: rgba(59, 130, 246, 0.05); }
         .data-table .row-num {
             color: #475569; text-align: right; padding-right: 12px;
-            font-size: 0.85em; user-select: none;
-            border-right: 1px solid #334155; background: #111827;
+            font-size: 0.8em; user-select: none;
+            border-right: 1px solid var(--border-color); background: #0f1322;
         }
         .data-table .cell-empty { color: #334155; font-style: italic; }
 
         .text-preview {
-            padding: 15px; font-family: monospace; font-size: 0.8em;
-            color: #10b981; white-space: pre-wrap; line-height: 1.6;
+            padding: 16px; font-family: Menlo, Monaco, Consolas, monospace; font-size: 0.78rem;
+            color: var(--success); white-space: pre-wrap; line-height: 1.6;
         }
         .text-preview .line-num {
             display: inline-block; width: 40px; color: #475569;
             text-align: right; margin-right: 12px; user-select: none;
         }
-        .error-preview { padding: 15px; color: #ef4444; font-size: 0.85em; }
+        .error-preview { padding: 16px; color: var(--danger); font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>📂 Tenant Report Reader</h1>
-    <p class="subtitle">Upload tenant reports — the engine extracts sales data into a unified master report.</p>
+    <div class="header-section">
+        <i data-lucide="building-2" style="width: 32px; height: 32px; color: var(--accent-primary);"></i>
+        <div>
+            <h1>Tenant Report Reader</h1>
+            <div class="subtitle" style="margin:0">Automated reporting pipeline: parse uploads into unified Excel formats &amp; PPTX dashboards.</div>
+        </div>
+    </div>
 
+    <!-- CONFIGURATION CARD -->
     <div class="config-card">
-        <div class="config-title">📅 Report Month</div>
+        <div class="config-title">
+            <i data-lucide="calendar" style="width: 16px; height: 16px;"></i>
+            Reporting Period Configuration
+        </div>
         <div class="config-row">
             <div class="config-group">
-                <label>Month</label>
+                <label>Target Month</label>
                 <select id="monthSel">
                     <option value="1">January</option><option value="2">February</option>
                     <option value="3">March</option><option value="4">April</option>
@@ -1242,62 +1392,116 @@ HTML_UI = r"""
                 </select>
             </div>
             <div class="config-group">
-                <label>Year</label>
-                <input id="yearIn" type="number" value="2026" min="2000" max="2100" style="width:90px"/>
+                <label>Target Year</label>
+                <input id="yearIn" type="number" value="2026" min="2020" max="2100" style="width:100px"/>
             </div>
-            <div class="month-preview">Target: <b id="targetLabel">January 2026</b></div>
+            <div class="month-preview">
+                Processing reports for: <b id="targetLabel">January 2026</b>
+            </div>
         </div>
     </div>
 
+    <!-- INTEGRATED DROP ZONE -->
     <div class="drop-zone" id="dropZone">
-        <div class="icon">📥</div>
-        <p><b>Drop files or folder here</b></p>
-        <p style="font-size: 0.85em;">Or use the buttons below</p>
-    </div>
-
-    <div class="browse-row">
-        <button class="browse-btn btn-files" onclick="document.getElementById('fileInput').click()">📄 Browse Files</button>
-        <button class="browse-btn btn-folder" onclick="document.getElementById('folderInput').click()">📁 Browse Folder</button>
-        <button class="browse-btn btn-clear" onclick="clearAll()">↺ Clear All</button>
+        <i data-lucide="upload-cloud" class="drop-icon"></i>
+        <div class="drop-title">Drag and drop calendar, sales, or traffic files here</div>
+        <div class="drop-subtitle">Accepted types: .xlsx, .xls, .pdf · Size limit: 25MB per file</div>
+        
+        <div class="browse-row">
+            <button class="browse-btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                <i data-lucide="file-plus" style="width: 14px; height: 14px;"></i>
+                Browse Files
+            </button>
+            <button class="browse-btn btn-secondary" onclick="document.getElementById('folderInput').click()">
+                <i data-lucide="folder-open" style="width: 14px; height: 14px;"></i>
+                Browse Folders
+            </button>
+        </div>
     </div>
 
     <input type="file" id="fileInput" class="hidden-input" accept=".xlsx,.xls,.pdf" multiple />
     <input type="file" id="folderInput" class="hidden-input" webkitdirectory />
 
-    <div id="loader" class="loader"><span class="spinner"></span> Reading, validating &amp; parsing files...</div>
+    <div id="loader" class="loader">
+        <span class="spinner"></span> 
+        Parsing inputs &amp; generating consolidated matrix summaries...
+    </div>
 
+    <!-- METRICS SUMMARY DASHBOARD -->
     <div class="summary" id="summary">
         <div class="summary-grid">
-            <div class="summary-card"><div class="num c-blue" id="sTotal">0</div><div class="label">Total Files</div></div>
-            <div class="summary-card"><div class="num c-green" id="sOk">0</div><div class="label">Read OK</div></div>
-            <div class="summary-card"><div class="num c-red" id="sFail">0</div><div class="label">Read Failed</div></div>
-            <div class="summary-card"><div class="num c-purple" id="sMatch">0</div><div class="label">Month Match ✅</div></div>
-            <div class="summary-card"><div class="num c-yellow" id="sWrong">0</div><div class="label">Wrong Month ⚠️</div></div>
-        </div>
-    </div>
-
-    <!-- MASTER REPORT -->
-    <div class="master" id="masterSection">
-    <div class="config-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-            <div class="config-title" style="margin-bottom:0">📊 Master Report — Preview</div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-                <button class="browse-btn btn-folder" id="exportBtn" onclick="exportExcel()" style="margin:0">
-                    ⬇️ Export Excel
-                </button>
-                <button class="browse-btn" id="exportPptxBtn" onclick="exportPptx()"
-                    style="margin:0;background:#7c3aed;color:#fff">
-                    📊 Export PowerPoint
-                </button>
+            <div class="summary-card">
+                <div class="summary-card-icon"><i data-lucide="files" class="c-blue"></i></div>
+                <div class="summary-card-info">
+                    <div class="num c-blue" id="sTotal">0</div>
+                    <div class="label">Total Uploaded</div>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-icon"><i data-lucide="check-circle-2" class="c-green"></i></div>
+                <div class="summary-card-info">
+                    <div class="num c-green" id="sOk">0</div>
+                    <div class="label">Successfully Read</div>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-icon"><i data-lucide="alert-circle" class="c-red"></i></div>
+                <div class="summary-card-info">
+                    <div class="num c-red" id="sFail">0</div>
+                    <div class="label">Rejected / Error</div>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-icon"><i data-lucide="calendar-range" class="c-purple"></i></div>
+                <div class="summary-card-info">
+                    <div class="num c-purple" id="sMatch">0</div>
+                    <div class="label">Period Matches</div>
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-icon"><i data-lucide="calendar-x" class="c-yellow"></i></div>
+                <div class="summary-card-info">
+                    <div class="num c-yellow" id="sWrong">0</div>
+                    <div class="label">Mismatched Period</div>
+                </div>
             </div>
         </div>
-        <div class="master-warn" id="masterWarn"></div>
-        <div class="master-table-wrap" style="margin-top:12px">
-            <table class="master-table" id="masterTable"></table>
+    </div>
+
+    <!-- MASTER REPORT PREVIEW MATRIX -->
+    <div class="master" id="masterSection">
+        <div class="config-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px">
+                <div class="config-title" style="margin-bottom:0">
+                    <i data-lucide="layout-grid" style="width: 16px; height: 16px;"></i>
+                    Unified Management Matrix
+                </div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <button class="browse-btn btn-secondary" id="exportBtn" onclick="exportExcel()">
+                        <i data-lucide="download" style="width: 14px; height: 14px;"></i> Export Excel
+                    </button>
+                    <button class="browse-btn btn-primary" id="exportPptxBtn" onclick="exportPptx()">
+                        <i data-lucide="presentation" style="width: 14px; height: 14px;"></i> Export PowerPoint
+                    </button>
+                </div>
+            </div>
+            <div class="master-warn" id="masterWarn"></div>
+            <div class="master-table-wrap" style="margin-top:16px">
+                <table class="master-table" id="masterTable"></table>
+            </div>
         </div>
     </div>
-</div>
 
+    <!-- PROCESSED FILES QUEUE -->
+    <div class="file-list-header" id="fileListHeader" style="display:none">
+        <div class="file-list-title">
+            <i data-lucide="layers" style="width: 16px; height: 16px; color: var(--text-muted);"></i>
+            Data Input Processing Status
+        </div>
+        <button class="browse-btn btn-clear" onclick="clearAll()">
+            <i data-lucide="rotate-ccw" style="width: 12px; height: 12px;"></i> Clear Queue
+        </button>
+    </div>
     <div class="file-list" id="fileList"></div>
 </div>
 
@@ -1309,6 +1513,9 @@ var summaryEl   = document.getElementById("summary");
 var fileInput   = document.getElementById("fileInput");
 var folderInput = document.getElementById("folderInput");
 
+// Initialize Lucide Icons
+lucide.createIcons();
+
 function updateLabel() {
     var months = ["","January","February","March","April","May","June",
                   "July","August","September","October","November","December"];
@@ -1318,6 +1525,7 @@ function updateLabel() {
 }
 document.getElementById("monthSel").addEventListener("change", updateLabel);
 document.getElementById("yearIn").addEventListener("input", updateLabel);
+
 var now = new Date();
 document.getElementById("monthSel").value = now.getMonth() + 1;
 document.getElementById("yearIn").value = now.getFullYear();
@@ -1398,6 +1606,7 @@ async function sendFiles(formData) {
     fileList.innerHTML = "";
     summaryEl.style.display = "none";
     document.getElementById("masterSection").style.display = "none";
+    document.getElementById("fileListHeader").style.display = "none";
     loader.style.display = "block";
 
     formData.append("month", document.getElementById("monthSel").value);
@@ -1418,6 +1627,7 @@ function clearAll() {
     fileList.innerHTML = "";
     summaryEl.style.display = "none";
     document.getElementById("masterSection").style.display = "none";
+    document.getElementById("fileListHeader").style.display = "none";
     loader.style.display = "none";
 }
 
@@ -1447,6 +1657,7 @@ function renderAll(data) {
     document.getElementById("sMatch").textContent = matched;
     document.getElementById("sWrong").textContent = wrong;
     summaryEl.style.display = "block";
+    document.getElementById("fileListHeader").style.display = "flex";
 
     results.sort(function(a, b) {
         var order = {"mismatch": 0, "warning": 1, "ok_multi": 2, "ok": 3};
@@ -1458,6 +1669,7 @@ function renderAll(data) {
     buildMaster(results);
 
     for (var i = 0; i < results.length; i++) renderCard(results[i], i);
+    lucide.createIcons();
 }
 
 async function exportExcel() {
@@ -1468,15 +1680,16 @@ async function exportExcel() {
     }
 
     var btn = document.getElementById("exportBtn");
-    btn.textContent = "⏳ Generating...";
+    var origText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span> Generating Excel...';
     btn.disabled = true;
 
-     var payload = {
-        month   : parseInt(document.getElementById("monthSel").value),
-        year    : parseInt(document.getElementById("yearIn").value),
-        master  : data,
-        traffic : window._trafficExportData || null,
-        events  : window._eventExportData || null,    // ← NEW
+    var payload = {
+        month: parseInt(document.getElementById("monthSel").value),
+        year: parseInt(document.getElementById("yearIn").value),
+        master: data,
+        traffic: window._trafficExportData || null,
+        events: window._eventExportData || null
     };
 
     try {
@@ -1510,7 +1723,7 @@ async function exportExcel() {
     } catch (err) {
         alert("Export error: " + err.message);
     } finally {
-        btn.textContent = "⬇️ Export to Excel";
+        btn.innerHTML = origText;
         btn.disabled = false;
     }
 }
@@ -1523,7 +1736,8 @@ async function exportPptx() {
     }
 
     var btn = document.getElementById("exportPptxBtn");
-    btn.textContent = "⏳ Building PowerPoint...";
+    var origText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span> Assembly Slide Deck...';
     btn.disabled = true;
 
     var payload = {
@@ -1531,7 +1745,7 @@ async function exportPptx() {
         year    : parseInt(document.getElementById("yearIn").value),
         master  : data,
         traffic : window._trafficExportData || null,
-        events  : window._eventExportData || null,    // ← NEW
+        events  : window._eventExportData || null
     };
 
     try {
@@ -1552,8 +1766,7 @@ async function exportPptx() {
         var a    = document.createElement("a");
         a.href   = url;
 
-        var months = ["","Jan","Feb","Mar","Apr","May","Jun",
-                      "Jul","Aug","Sep","Oct","Nov","Dec"];
+        var months = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
         var m = parseInt(document.getElementById("monthSel").value);
         var y = document.getElementById("yearIn").value;
         a.download = "Mall_Report_" + months[m] + "_" + y + ".pptx";
@@ -1566,240 +1779,12 @@ async function exportPptx() {
     } catch (err) {
         alert("PowerPoint export error: " + err.message);
     } finally {
-        btn.textContent = "📊 Export PowerPoint";
+        btn.innerHTML = origText;
         btn.disabled = false;
     }
 }
 
-// ─── MASTER REPORT ─────────────────────────────────────────
-
-function buildMaster(results) {
-    var tenantMap = {};
-    var allMonths = {};
-    var unparsed = [];
-
-    // Traffic data stored separately
-    var trafficData = { monthly: {}, daily: [] };
-    var hasTraffic = false;
-
-    // Events data stored separately
-    var eventsData = { daily: [], monthly: {}, events_flat: [] };
-    var hasEvents = false;
-
-    results.forEach(function(res) {
-        if (res.parsed && res.parsed.success) {
-
-            // Handle events files
-            if (res.parsed.is_events || res.parsed.format === "events") {
-                hasEvents = true;
-                eventsData.daily = (eventsData.daily || []).concat(res.parsed.daily || []);
-                eventsData.events_flat = (eventsData.events_flat || []).concat(res.parsed.events_flat || []);
-                // Merge monthly event counts
-                var em = res.parsed.monthly || {};
-                Object.keys(em).forEach(function(k) {
-                    if (!eventsData.monthly[k]) {
-                        eventsData.monthly[k] = em[k];
-                    } else {
-                        eventsData.monthly[k].event_count =
-                            (eventsData.monthly[k].event_count || 0) +
-                            (em[k].event_count || 0);
-                        eventsData.monthly[k].events =
-                            (eventsData.monthly[k].events || []).concat(em[k].events || []);
-                    }
-                    allMonths[k] = true;
-                });
-                return;
-            }
-
-            // Handle traffic files
-            if (res.parsed.is_traffic || res.parsed.format === "traffic") {
-                hasTraffic = true;
-                var tm = res.parsed.monthly || {};
-                Object.keys(tm).forEach(function(k) {
-                    trafficData.monthly[k] = (trafficData.monthly[k] || 0) + tm[k];
-                    allMonths[k] = true;
-                });
-                trafficData.daily = trafficData.daily.concat(res.parsed.daily || []);
-                return;
-            }
-
-            // Handle sales files
-            var ts = res.parsed.tenants;
-            Object.keys(ts).forEach(function(t) {
-                if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0, daily: [] };
-                if (tenantMap[t].files.indexOf(res.filename) === -1)
-                    tenantMap[t].files.push(res.filename);
-                var m = ts[t].monthly || {};
-                Object.keys(m).forEach(function(k) {
-                    if (!(k in tenantMap[t].monthly)) tenantMap[t].monthly[k] = m[k];
-                    allMonths[k] = true;
-                });
-                var d = ts[t].daily || [];
-                tenantMap[t].dailyCount += d.length;
-                tenantMap[t].daily = tenantMap[t].daily.concat(d);
-            });
-
-        } else {
-            var msg = res.filename;
-            if (res.parsed && res.parsed.message) msg += " — " + res.parsed.message;
-            unparsed.push(msg);
-        }
-    });
-
-    var tenantNames = Object.keys(tenantMap);
-    if (!tenantNames.length && !hasTraffic && !hasEvents) {
-        document.getElementById("masterSection").style.display = "none";
-        return;
-    }
-
-    var months = Object.keys(allMonths).sort();
-    var tKey = targetKey();
-
-    tenantNames.sort(function(a, b) {
-        return (tenantMap[b].monthly[tKey] || 0) - (tenantMap[a].monthly[tKey] || 0);
-    });
-
-    // Build table
-    var html = "<thead><tr><th>Tenant</th>";
-    months.forEach(function(mk) {
-        var parts = mk.split("-");
-        var label = monthShort(parseInt(parts[1])) + "-" + parts[0].slice(2);
-        html += '<th class="' + (mk === tKey ? "t-head" : "") + '">' + label + '</th>';
-    });
-    html += "<th>Total</th></tr></thead><tbody>";
-
-    var colTotals = {};
-    var grand = 0;
-
-    // Sales rows
-    tenantNames.forEach(function(t) {
-        var tm = tenantMap[t];
-        var rowTotal = 0;
-        html += "<tr><td><b>" + esc(t) + "</b><br><span class='src'>" +
-                esc(tm.files.join(", ")) +
-                (tm.dailyCount ? " · " + tm.dailyCount + " daily rows" : "") +
-                "</span></td>";
-        months.forEach(function(mk) {
-            var v = tm.monthly[mk];
-            if (v !== undefined) {
-                rowTotal += v;
-                colTotals[mk] = (colTotals[mk] || 0) + v;
-                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
-            } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
-            }
-        });
-        grand += rowTotal;
-        html += "<td><b>" + fmtNum(rowTotal) + "</b></td></tr>";
-    });
-
-    // Sales total row
-    html += '<tr class="total-row"><td>💰 TOTAL SALES</td>';
-    months.forEach(function(mk) {
-        html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(colTotals[mk] || 0) + '</td>';
-    });
-    html += "<td>" + fmtNum(grand) + "</td></tr>";
-
-    // Traffic row
-    if (hasTraffic) {
-        html += '<tr style="border-top:3px solid #3b82f6"><td><b>🚗 TRAFFIC</b><br>' +
-                '<span class="src">Visitor count</span></td>';
-        var trafficTotal = 0;
-        months.forEach(function(mk) {
-            var v = trafficData.monthly[mk];
-            if (v !== undefined) {
-                trafficTotal += v;
-                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
-            } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
-            }
-        });
-        html += "<td><b>" + fmtNum(trafficTotal) + "</b></td></tr>";
-
-        // Sales per visitor row
-        html += '<tr><td><b>📊 SALES / VISITOR</b><br>' +
-                '<span class="src">Average spend per visitor</span></td>';
-        months.forEach(function(mk) {
-            var sales = colTotals[mk] || 0;
-            var traffic = trafficData.monthly[mk] || 0;
-            var ratio = traffic > 0 ? Math.round(sales / traffic) : 0;
-            if (ratio > 0) {
-                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(ratio) + '</td>';
-            } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
-            }
-        });
-        var grandRatio = (trafficTotal > 0) ? Math.round(grand / trafficTotal) : 0;
-        html += "<td><b>" + fmtNum(grandRatio) + "</b></td></tr>";
-    }
-
-    // Events row
-    if (hasEvents) {
-        html += '<tr style="border-top:3px solid #a78bfa"><td><b>🎪 EVENTS</b><br>' +
-                '<span class="src">Mall event count</span></td>';
-        var totalEventCount = 0;
-        months.forEach(function(mk) {
-            var em = eventsData.monthly[mk];
-            var count = em ? (em.event_count || 0) : 0;
-            if (count > 0) {
-                totalEventCount += count;
-                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + count + ' event(s)</td>';
-            } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
-            }
-        });
-        html += "<td><b>" + totalEventCount + "</b></td></tr>";
-
-        // Events detail row — show event names for target month only
-        var targetMonthEvents = eventsData.monthly[tKey];
-        if (targetMonthEvents && targetMonthEvents.events && targetMonthEvents.events.length > 0) {
-            // Group event names by date for the tooltip-style detail
-            var eventNames = [];
-            var seen = {};
-            targetMonthEvents.events.forEach(function(e) {
-                var key = e.event_name;
-                if (!seen[key]) {
-                    seen[key] = true;
-                    eventNames.push(e.event_name);
-                }
-            });
-
-            html += '<tr><td colspan="' + (months.length + 2) + '" style="' +
-                    'padding:8px 12px;background:rgba(167,139,250,0.05);' +
-                    'font-size:0.78em;color:#a78bfa;border-top:1px solid rgba(167,139,250,0.15)">' +
-                    '<b>Events this month:</b> ' +
-                    esc(eventNames.slice(0, 12).join(" · ")) +
-                    (eventNames.length > 12 ? ' · <i>+' + (eventNames.length - 12) + ' more</i>' : '') +
-                    '</td></tr>';
-        }
-    }
-
-    html += "</tbody>";
-
-    document.getElementById("masterTable").innerHTML = html;
-
-    var warnEl = document.getElementById("masterWarn");
-    if (unparsed.length) {
-        warnEl.style.display = "block";
-        warnEl.innerHTML = "⚠️ <b>" + unparsed.length + " file(s) could not be parsed:</b><br>• " +
-            unparsed.map(esc).join("<br>• ");
-    } else {
-        warnEl.style.display = "none";
-    }
-
-    document.getElementById("masterSection").style.display = "block";
-
-    // Store for export
-    window._masterExportData = tenantMap;
-    window._trafficExportData = hasTraffic ? trafficData : null;
-    window._eventExportData   = hasEvents  ? eventsData  : null;
-}
-
-function monthShort(m) {
-    return ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m];
-}
-
-// ─── FILE CARDS ────────────────────────────────────────────
+// ─── FILE CARDS RENDERER ───────────────────────────────────
 
 function renderCard(res, idx) {
     var card = document.createElement("div");
@@ -1822,16 +1807,16 @@ function renderCard(res, idx) {
     if (res.month_check) {
         var mc = res.month_check;
         var mbClass = mc.status === "ok" ? "mb-match" : mc.status === "mismatch" ? "mb-mismatch" : "mb-warn";
-        var shortMsg = mc.message.length > 50 ? mc.message.substring(0, 47) + "..." : mc.message;
-        monthBadge = '<span class="month-badge ' + mbClass + '">' + mc.icon + " " + esc(shortMsg) + '</span>';
+        var iconName = mc.status === "ok" ? "check-circle" : mc.status === "mismatch" ? "alert-triangle" : "alert-circle";
+        monthBadge = '<span class="month-badge ' + mbClass + '"><i data-lucide="' + iconName + '" style="width:12px;height:12px"></i>' + esc(mc.message) + '</span>';
     }
 
     var parseBadge = "";
     if (res.parsed) {
         if (res.parsed.success)
-            parseBadge = '<span class="badge b-parse">🧩 ' + esc(res.parsed.format) + '</span>';
+            parseBadge = '<span class="badge b-parse"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"></i>' + esc(res.parsed.format) + '</span>';
         else
-            parseBadge = '<span class="badge b-fail">🧩 unparsed</span>';
+            parseBadge = '<span class="badge b-fail">unparsed</span>';
     }
 
     var header = document.createElement("div");
@@ -1844,19 +1829,20 @@ function renderCard(res, idx) {
             '<span class="badge ' + statusClass + '">' + statusText + '</span>' +
             monthBadge + parseBadge +
         '</div>' +
-        '<div style="display:flex;align-items:center;gap:10px">' +
+        '<div style="display:flex;align-items:center;gap:12px">' +
             '<span class="row-count">' + rowText + '</span>' +
-            '<span class="arrow" id="' + arId + '">▼</span>' +
+            '<span class="arrow" id="' + arId + '"><i data-lucide="chevron-down" style="width:16px;height:16px"></i></span>' +
         '</div>';
     card.appendChild(header);
 
     if (res.month_check) {
         var mc = res.month_check;
         var barClass = mc.match ? "match" : mc.status === "mismatch" ? "mismatch" : "warn";
-        var detStr = mc.detected.length > 0 ? "Detected: " + mc.detected.join(", ") : "No months detected";
+        var detStr = mc.detected.length > 0 ? "Detected: " + mc.detected.join(", ") : "No dates detected";
+        var iconName = mc.match ? "check-circle-2" : "alert-circle";
         var bar = document.createElement("div");
         bar.className = "month-bar " + barClass;
-        bar.innerHTML = '<span>' + mc.icon + ' ' + esc(mc.message) + '</span>' +
+        bar.innerHTML = '<span style="display:flex;align-items:center;gap:4px"><i data-lucide="' + iconName + '" style="width:12px;height:12px"></i>' + esc(mc.message) + '</span>' +
             '<span class="detected-list">' + esc(detStr) + '</span>';
         card.appendChild(bar);
     }
@@ -1864,7 +1850,7 @@ function renderCard(res, idx) {
     if (res.parsed && res.parsed.message) {
         var pb = document.createElement("div");
         pb.className = "parse-bar";
-        pb.textContent = "🧩 " + res.parsed.message;
+        pb.innerHTML = '<i data-lucide="binary" style="width:12px;height:12px"></i> ' + esc(res.parsed.message);
         card.appendChild(pb);
     }
 
@@ -1873,7 +1859,7 @@ function renderCard(res, idx) {
     preview.id = pvId;
 
     if (!res.success) {
-        preview.innerHTML = '<div class="error-preview">' + esc(res.error_message || "Unknown error") + '</div>';
+        preview.innerHTML = '<div class="error-preview"><i data-lucide="x-octagon" style="width:16px;height:16px"></i>' + esc(res.error_message || "Unknown file read error") + '</div>';
     } else if (res.data_type === "table") {
         preview.innerHTML = buildTable(res.data_rows, res.data_cols);
     } else if (res.data_type === "text") {
