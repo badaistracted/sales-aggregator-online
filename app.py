@@ -1774,7 +1774,7 @@ async function exportPptx() {
 
     var btn = document.getElementById("exportPptxBtn");
     var origText = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner"></span> Assembly Slide Deck...';
+    btn.innerHTML = '<span class="spinner"></span> Generating Slide Deck...';
     btn.disabled = true;
 
     var payload = {
