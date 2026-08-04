@@ -1361,6 +1361,43 @@ HTML_UI = r"""
             text-align: right; margin-right: 12px; user-select: none;
         }
         .error-preview { padding: 16px; color: var(--danger); font-size: 0.85rem; display: flex; align-items: center; gap: 8px; }
+                /* Warning badge */
+        .b-warn { 
+            background: rgba(245,158,11,0.12); 
+            color: var(--warning); 
+            border: 1px solid rgba(245,158,11,0.25); 
+        }
+
+        /* Parse metadata tags */
+        .meta-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.78rem;
+            color: #c4b5fd;
+            background: rgba(139, 92, 246, 0.06);
+            border: 1px solid rgba(139, 92, 246, 0.12);
+            padding: 2px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+        .meta-tag b { color: #e9d5ff; font-weight: 600; }
+        .meta-sep {
+            color: rgba(148, 163, 184, 0.3);
+            margin: 0 2px;
+            font-size: 0.9rem;
+        }
+        .parse-bar {
+            padding: 8px 20px;
+            font-size: 0.8rem;
+            color: #d8b4fe;
+            background: rgba(167,139,250,0.03);
+            border-top: 1px solid rgba(167,139,250,0.08);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
     </style>
 </head>
 <body>
