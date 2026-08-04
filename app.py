@@ -1784,6 +1784,234 @@ async function exportPptx() {
     }
 }
 
+// ─── MASTER REPORT ─────────────────────────────────────────
+
+function buildMaster(results) {
+    var tenantMap = {};
+    var allMonths = {};
+    var unparsed = [];
+
+    // Traffic data stored separately
+    var trafficData = { monthly: {}, daily: [] };
+    var hasTraffic = false;
+
+    // Events data stored separately
+    var eventsData = { daily: [], monthly: {}, events_flat: [] };
+    var hasEvents = false;
+
+    results.forEach(function(res) {
+        if (res.parsed && res.parsed.success) {
+
+            // Handle events files
+            if (res.parsed.is_events || res.parsed.format === "events") {
+                hasEvents = true;
+                eventsData.daily = (eventsData.daily || []).concat(res.parsed.daily || []);
+                eventsData.events_flat = (eventsData.events_flat || []).concat(res.parsed.events_flat || []);
+                // Merge monthly event counts
+                var em = res.parsed.monthly || {};
+                Object.keys(em).forEach(function(k) {
+                    if (!eventsData.monthly[k]) {
+                        eventsData.monthly[k] = em[k];
+                    } else {
+                        eventsData.monthly[k].event_count =
+                            (eventsData.monthly[k].event_count || 0) +
+                            (em[k].event_count || 0);
+                        eventsData.monthly[k].events =
+                            (eventsData.monthly[k].events || []).concat(em[k].events || []);
+                    }
+                    allMonths[k] = true;
+                });
+                return;
+            }
+
+            // Handle traffic files
+            if (res.parsed.is_traffic || res.parsed.format === "traffic") {
+                hasTraffic = true;
+                var tm = res.parsed.monthly || {};
+                Object.keys(tm).forEach(function(k) {
+                    trafficData.monthly[k] = (trafficData.monthly[k] || 0) + tm[k];
+                    allMonths[k] = true;
+                });
+                trafficData.daily = trafficData.daily.concat(res.parsed.daily || []);
+                return;
+            }
+
+            // Handle sales files
+            var ts = res.parsed.tenants;
+            Object.keys(ts).forEach(function(t) {
+                if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0, daily: [] };
+                if (tenantMap[t].files.indexOf(res.filename) === -1)
+                    tenantMap[t].files.push(res.filename);
+                var m = ts[t].monthly || {};
+                Object.keys(m).forEach(function(k) {
+                    if (!(k in tenantMap[t].monthly)) tenantMap[t].monthly[k] = m[k];
+                    allMonths[k] = true;
+                });
+                var d = ts[t].daily || [];
+                tenantMap[t].dailyCount += d.length;
+                tenantMap[t].daily = tenantMap[t].daily.concat(d);
+            });
+
+        } else {
+            var msg = res.filename;
+            if (res.parsed && res.parsed.message) msg += " — " + res.parsed.message;
+            unparsed.push(msg);
+        }
+    });
+
+    var tenantNames = Object.keys(tenantMap);
+    if (!tenantNames.length && !hasTraffic && !hasEvents) {
+        document.getElementById("masterSection").style.display = "none";
+        return;
+    }
+
+    var months = Object.keys(allMonths).sort();
+    var tKey = targetKey();
+
+    tenantNames.sort(function(a, b) {
+        return (tenantMap[b].monthly[tKey] || 0) - (tenantMap[a].monthly[tKey] || 0);
+    });
+
+    // Build table
+    var html = "<thead><tr><th>Tenant</th>";
+    months.forEach(function(mk) {
+        var parts = mk.split("-");
+        var label = monthShort(parseInt(parts[1])) + "-" + parts[0].slice(2);
+        html += '<th class="' + (mk === tKey ? "t-head" : "") + '">' + label + '</th>';
+    });
+    html += "<th>Total</th></tr></thead><tbody>";
+
+    var colTotals = {};
+    var grand = 0;
+
+    // Sales rows
+    tenantNames.forEach(function(t) {
+        var tm = tenantMap[t];
+        var rowTotal = 0;
+        html += "<tr><td><b>" + esc(t) + "</b><br><span class='src'>" +
+                esc(tm.files.join(", ")) +
+                (tm.dailyCount ? " · " + tm.dailyCount + " daily rows" : "") +
+                "</span></td>";
+        months.forEach(function(mk) {
+            var v = tm.monthly[mk];
+            if (v !== undefined) {
+                rowTotal += v;
+                colTotals[mk] = (colTotals[mk] || 0) + v;
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        grand += rowTotal;
+        html += "<td><b>" + fmtNum(rowTotal) + "</b></td></tr>";
+    });
+
+    // Sales total row
+    html += '<tr class="total-row"><td>💰 TOTAL SALES</td>';
+    months.forEach(function(mk) {
+        html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(colTotals[mk] || 0) + '</td>';
+    });
+    html += "<td>" + fmtNum(grand) + "</td></tr>";
+
+    // Traffic row
+    if (hasTraffic) {
+        html += '<tr style="border-top:3px solid #3b82f6"><td><b>🚗 TRAFFIC</b><br>' +
+                '<span class="src">Visitor count</span></td>';
+        var trafficTotal = 0;
+        months.forEach(function(mk) {
+            var v = trafficData.monthly[mk];
+            if (v !== undefined) {
+                trafficTotal += v;
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        html += "<td><b>" + fmtNum(trafficTotal) + "</b></td></tr>";
+
+        // Sales per visitor row
+        html += '<tr><td><b>📊 SALES / VISITOR</b><br>' +
+                '<span class="src">Average spend per visitor</span></td>';
+        months.forEach(function(mk) {
+            var sales = colTotals[mk] || 0;
+            var traffic = trafficData.monthly[mk] || 0;
+            var ratio = traffic > 0 ? Math.round(sales / traffic) : 0;
+            if (ratio > 0) {
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(ratio) + '</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        var grandRatio = (trafficTotal > 0) ? Math.round(grand / trafficTotal) : 0;
+        html += "<td><b>" + fmtNum(grandRatio) + "</b></td></tr>";
+    }
+
+    // Events row
+    if (hasEvents) {
+        html += '<tr style="border-top:3px solid #a78bfa"><td><b>🎪 EVENTS</b><br>' +
+                '<span class="src">Mall event count</span></td>';
+        var totalEventCount = 0;
+        months.forEach(function(mk) {
+            var em = eventsData.monthly[mk];
+            var count = em ? (em.event_count || 0) : 0;
+            if (count > 0) {
+                totalEventCount += count;
+                html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + count + ' event(s)</td>';
+            } else {
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+            }
+        });
+        html += "<td><b>" + totalEventCount + "</b></td></tr>";
+
+        // Events detail row — show event names for target month only
+        var targetMonthEvents = eventsData.monthly[tKey];
+        if (targetMonthEvents && targetMonthEvents.events && targetMonthEvents.events.length > 0) {
+            // Group event names by date for the tooltip-style detail
+            var eventNames = [];
+            var seen = {};
+            targetMonthEvents.events.forEach(function(e) {
+                var key = e.event_name;
+                if (!seen[key]) {
+                    seen[key] = true;
+                    eventNames.push(e.event_name);
+                }
+            });
+
+            html += '<tr><td colspan="' + (months.length + 2) + '" style="' +
+                    'padding:8px 12px;background:rgba(167,139,250,0.05);' +
+                    'font-size:0.78em;color:#a78bfa;border-top:1px solid rgba(167,139,250,0.15)">' +
+                    '<b>Events this month:</b> ' +
+                    esc(eventNames.slice(0, 12).join(" · ")) +
+                    (eventNames.length > 12 ? ' · <i>+' + (eventNames.length - 12) + ' more</i>' : '') +
+                    '</td></tr>';
+        }
+    }
+
+    html += "</tbody>";
+
+    document.getElementById("masterTable").innerHTML = html;
+
+    var warnEl = document.getElementById("masterWarn");
+    if (unparsed.length) {
+        warnEl.style.display = "block";
+        warnEl.innerHTML = "⚠️ <b>" + unparsed.length + " file(s) could not be parsed:</b><br>• " +
+            unparsed.map(esc).join("<br>• ");
+    } else {
+        warnEl.style.display = "none";
+    }
+
+    document.getElementById("masterSection").style.display = "block";
+
+    // Store for export
+    window._masterExportData = tenantMap;
+    window._trafficExportData = hasTraffic ? trafficData : null;
+    window._eventExportData   = hasEvents  ? eventsData  : null;
+}
+
+function monthShort(m) {
+    return ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m];
+}
+
 // ─── FILE CARDS RENDERER ───────────────────────────────────
 
 function renderCard(res, idx) {
