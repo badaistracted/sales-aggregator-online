@@ -2018,35 +2018,68 @@ function renderCard(res, idx) {
     var card = document.createElement("div");
     card.className = "file-card";
 
-    if (res.month_check) {
-        if (res.month_check.status === "mismatch") card.classList.add("mismatch");
-        else if (res.month_check.status === "ok") card.classList.add("matched");
-        else card.classList.add("warning");
-    }
-
     var ext = res.filename.split(".").pop().toLowerCase();
     var extClass = ext === "pdf" ? "b-pdf" : ext === "xls" ? "b-xls" : "b-xlsx";
-    var statusClass = res.success ? "b-ok" : "b-fail";
-    var statusText  = res.success ? "OK" : "FAIL";
-    var rowText = (res.total_rows || 0).toLocaleString() + " rows";
     var pvId = "pv_" + idx, arId = "ar_" + idx;
 
-    var monthBadge = "";
-    if (res.month_check) {
-        var mc = res.month_check;
-        var mbClass = mc.status === "ok" ? "mb-match" : mc.status === "mismatch" ? "mb-mismatch" : "mb-warn";
-        var iconName = mc.status === "ok" ? "check-circle" : mc.status === "mismatch" ? "alert-triangle" : "alert-circle";
-        monthBadge = '<span class="month-badge ' + mbClass + '"><i data-lucide="' + iconName + '" style="width:12px;height:12px"></i>' + esc(mc.message) + '</span>';
+    // ── Determine unified status ──────────────────────────────
+    var cardStatus = "neutral";  // neutral | ok | warning | error
+    var statusBadgeClass = "b-ok";
+    var statusText = "OK";
+
+    if (!res.success) {
+        cardStatus = "error";
+        statusBadgeClass = "b-fail";
+        statusText = "FAIL";
+    } else if (res.month_check) {
+        var ms = res.month_check.status;
+        if (ms === "ok") {
+            cardStatus = "ok";
+            statusBadgeClass = "b-ok";
+            statusText = "OK";
+        } else if (ms === "mismatch") {
+            cardStatus = "error";
+            statusBadgeClass = "b-fail";
+            statusText = "WRONG MONTH";
+        } else if (ms === "ok_multi") {
+            cardStatus = "warning";
+            statusBadgeClass = "b-warn";
+            statusText = "REVIEW";
+        } else {
+            cardStatus = "warning";
+            statusBadgeClass = "b-warn";
+            statusText = "UNVERIFIED";
+        }
     }
 
+    // Card border color
+    if (cardStatus === "error") card.classList.add("mismatch");
+    else if (cardStatus === "ok") card.classList.add("matched");
+    else if (cardStatus === "warning") card.classList.add("warning");
+
+    // ── Parse badge ───────────────────────────────────────────
     var parseBadge = "";
     if (res.parsed) {
-        if (res.parsed.success)
-            parseBadge = '<span class="badge b-parse"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"></i>' + esc(res.parsed.format) + '</span>';
-        else
+        if (res.parsed.success) {
+            var formatLabel = res.parsed.format;
+            if (formatLabel === "events") formatLabel = "event calendar";
+            else if (formatLabel === "traffic") formatLabel = "traffic data";
+            else if (formatLabel === "excel_columnar") formatLabel = "daily sales";
+            else if (formatLabel === "excel_pivot") formatLabel = "pivot sales";
+            else if (formatLabel === "pdf_daily") formatLabel = "pdf daily";
+            parseBadge = '<span class="badge b-parse"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px"></i>' + esc(formatLabel) + '</span>';
+        } else {
             parseBadge = '<span class="badge b-fail">unparsed</span>';
+        }
     }
 
+    // ── Row count ─────────────────────────────────────────────
+    var rowText = "";
+    if (res.total_rows) {
+        rowText = res.total_rows.toLocaleString() + " rows";
+    }
+
+    // ── Header row ────────────────────────────────────────────
     var header = document.createElement("div");
     header.className = "file-header";
     header.setAttribute("onclick", "toggle('" + pvId + "','" + arId + "')");
@@ -2054,34 +2087,120 @@ function renderCard(res, idx) {
         '<div class="file-info">' +
             '<span class="badge ' + extClass + '">' + ext.toUpperCase() + '</span>' +
             '<b>' + esc(res.filename) + '</b>' +
-            '<span class="badge ' + statusClass + '">' + statusText + '</span>' +
-            monthBadge + parseBadge +
+            '<span class="badge ' + statusBadgeClass + '">' + statusText + '</span>' +
+            parseBadge +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:12px">' +
-            '<span class="row-count">' + rowText + '</span>' +
+            (rowText ? '<span class="row-count">' + rowText + '</span>' : '') +
             '<span class="arrow" id="' + arId + '"><i data-lucide="chevron-down" style="width:16px;height:16px"></i></span>' +
         '</div>';
     card.appendChild(header);
 
-    if (res.month_check) {
+    // ── Month validation bar (single, non-redundant) ──────────
+    if (res.month_check && res.success) {
         var mc = res.month_check;
         var barClass = mc.match ? "match" : mc.status === "mismatch" ? "mismatch" : "warn";
-        var detStr = mc.detected.length > 0 ? "Detected: " + mc.detected.join(", ") : "No dates detected";
-        var iconName = mc.match ? "check-circle-2" : "alert-circle";
+        var iconName = mc.match && mc.status === "ok" ? "check-circle-2" : mc.status === "mismatch" ? "alert-triangle" : "alert-circle";
+
+        // Build concise message
+        var barMessage = "";
+        if (mc.status === "ok") {
+            barMessage = "Period verified: " + mc.target;
+        } else if (mc.status === "mismatch") {
+            barMessage = "Expected " + mc.target + " — file contains different period(s)";
+        } else if (mc.status === "ok_multi") {
+            // Summarize instead of listing every month
+            var otherCount = mc.detected.length - 1;
+            barMessage = "Contains " + mc.target;
+            if (otherCount > 0) {
+                barMessage += " + " + otherCount + " other month" + (otherCount > 1 ? "s" : "");
+            }
+        } else {
+            barMessage = "Could not verify reporting period";
+        }
+
+        // Detected months: show compact or expandable
+        var detHtml = "";
+        if (mc.detected.length > 0) {
+            if (mc.detected.length <= 3) {
+                detHtml = '<span class="detected-list">' + mc.detected.join(", ") + '</span>';
+            } else {
+                var detId = "det_" + idx;
+                detHtml = '<span class="detected-list">' +
+                    '<span style="cursor:pointer;text-decoration:underline dotted" onclick="event.stopPropagation();var el=document.getElementById(\'' + detId + '\');el.style.display=el.style.display===\'none\'?\'inline\':\'none\'">' +
+                        mc.detected.length + ' months detected — click to expand' +
+                    '</span>' +
+                    '<span id="' + detId + '" style="display:none;margin-left:6px">' +
+                        esc(mc.detected.join(", ")) +
+                    '</span>' +
+                '</span>';
+            }
+        }
+
         var bar = document.createElement("div");
         bar.className = "month-bar " + barClass;
-        bar.innerHTML = '<span style="display:flex;align-items:center;gap:4px"><i data-lucide="' + iconName + '" style="width:12px;height:12px"></i>' + esc(mc.message) + '</span>' +
-            '<span class="detected-list">' + esc(detStr) + '</span>';
+        bar.innerHTML =
+            '<span style="display:flex;align-items:center;gap:6px">' +
+                '<i data-lucide="' + iconName + '" style="width:13px;height:13px;flex-shrink:0"></i>' +
+                esc(barMessage) +
+            '</span>' +
+            detHtml;
         card.appendChild(bar);
     }
 
-    if (res.parsed && res.parsed.message) {
-        var pb = document.createElement("div");
-        pb.className = "parse-bar";
-        pb.innerHTML = '<i data-lucide="binary" style="width:12px;height:12px"></i> ' + esc(res.parsed.message);
-        card.appendChild(pb);
+    // ── Parse metadata bar (structured, not raw log) ──────────
+    if (res.parsed && res.parsed.message && res.success) {
+        var pm = res.parsed;
+        var metaTags = [];
+
+        // Extract structured info from the parsed result
+        if (pm.format === "events" && pm.events_flat) {
+            var evtMonths = {};
+            pm.events_flat.forEach(function(e) { evtMonths[e.date.substring(0, 7)] = true; });
+            var evtMonthKeys = Object.keys(evtMonths).sort();
+            var dateRange = "";
+            if (evtMonthKeys.length > 0) {
+                var first = evtMonthKeys[0].split("-");
+                var last = evtMonthKeys[evtMonthKeys.length - 1].split("-");
+                dateRange = monthShort(parseInt(first[1])) + " " + first[0] + " – " +
+                            monthShort(parseInt(last[1])) + " " + last[0];
+            }
+            metaTags.push('<span class="meta-tag">Events: <b>' + pm.events_flat.length + '</b></span>');
+            metaTags.push('<span class="meta-tag">Months: <b>' + evtMonthKeys.length + '</b></span>');
+            if (dateRange) metaTags.push('<span class="meta-tag">Range: <b>' + dateRange + '</b></span>');
+        } else if (pm.format === "traffic" && pm.daily) {
+            metaTags.push('<span class="meta-tag">Days: <b>' + pm.daily.length + '</b></span>');
+            var trafficMonths = Object.keys(pm.monthly || {}).sort();
+            metaTags.push('<span class="meta-tag">Months: <b>' + trafficMonths.length + '</b></span>');
+        } else if (pm.tenants) {
+            var tenantNames = Object.keys(pm.tenants);
+            var totalDaily = 0;
+            tenantNames.forEach(function(t) { totalDaily += (pm.tenants[t].daily || []).length; });
+            if (tenantNames.length === 1) {
+                metaTags.push('<span class="meta-tag">Tenant: <b>' + esc(tenantNames[0]) + '</b></span>');
+            } else {
+                metaTags.push('<span class="meta-tag">Tenants: <b>' + tenantNames.length + '</b></span>');
+            }
+            if (totalDaily > 0) metaTags.push('<span class="meta-tag">Daily rows: <b>' + totalDaily + '</b></span>');
+            var salesMonths = {};
+            tenantNames.forEach(function(t) {
+                Object.keys(pm.tenants[t].monthly || {}).forEach(function(k) { salesMonths[k] = true; });
+            });
+            metaTags.push('<span class="meta-tag">Months: <b>' + Object.keys(salesMonths).length + '</b></span>');
+        } else {
+            // Fallback: just show the message
+            metaTags.push('<span class="meta-tag">' + esc(pm.message) + '</span>');
+        }
+
+        if (metaTags.length > 0) {
+            var pb = document.createElement("div");
+            pb.className = "parse-bar";
+            pb.innerHTML = '<i data-lucide="binary" style="width:12px;height:12px;flex-shrink:0"></i>' + metaTags.join('<span class="meta-sep">·</span>');
+            card.appendChild(pb);
+        }
     }
 
+    // ── Preview area ──────────────────────────────────────────
     var preview = document.createElement("div");
     preview.className = "preview-area";
     preview.id = pvId;
