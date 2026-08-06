@@ -21,6 +21,7 @@ from chart_builder import (
 )
 from llm_writer import _build_kpis, generate_slide_text
 from pptx_builder import build_pptx
+from percentage_parser import detect_percentage_summary_file, parse_percentage_summary
 
 app = Flask(__name__)
 UPLOAD_FOLDER = Path("temp_uploads")
