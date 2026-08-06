@@ -786,8 +786,6 @@ events_data=None,
 """
 Assemble the full presentation.
 
-text
-
 charts keys:
     monthly_sales   — bar chart
     top_tenants     — horizontal bar
