@@ -1783,7 +1783,8 @@ async function exportPptx() {
         year    : parseInt(document.getElementById("yearIn").value),
         master  : data,
         traffic : window._trafficExportData || null,
-        events  : window._eventExportData || null
+        events  : window._eventExportData || null,
+        percentage_summary: window._percentageSummaryData || null
     };
 
     try {
@@ -1828,24 +1829,56 @@ function buildMaster(results) {
     var tenantMap = {};
     var allMonths = {};
     var unparsed = [];
+    var duplicateWarnings = [];
 
-    // Traffic data stored separately
     var trafficData = { monthly: {}, daily: [] };
     var hasTraffic = false;
 
-    // Events data stored separately
     var eventsData = { daily: [], monthly: {}, events_flat: [] };
     var hasEvents = false;
 
+    var percentageSummaryData = null;
+    var hasPercentageSummary = false;
+
     results.forEach(function(res) {
         if (res.parsed && res.parsed.success) {
+
+            // Handle percentage_summary files
+            if (res.parsed.is_percentage_summary || res.parsed.format === "percentage_summary") {
+                hasPercentageSummary = true;
+                percentageSummaryData = res.parsed;
+
+                var ts = res.parsed.tenants;
+                Object.keys(ts).forEach(function(t) {
+                    if (tenantMap[t]) {
+                        var existingMonths = Object.keys(tenantMap[t].monthly);
+                        var newMonths = Object.keys(ts[t].monthly || {});
+                        var overlap = existingMonths.filter(function(m) {
+                            return newMonths.indexOf(m) !== -1;
+                        });
+                        if (overlap.length > 0) {
+                            duplicateWarnings.push(t + " (" + overlap.join(", ") + ")");
+                        }
+                    }
+
+                    if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0, daily: [] };
+                    if (tenantMap[t].files.indexOf(res.filename) === -1)
+                        tenantMap[t].files.push(res.filename);
+
+                    var m = ts[t].monthly || {};
+                    Object.keys(m).forEach(function(k) {
+                        tenantMap[t].monthly[k] = m[k];
+                        allMonths[k] = true;
+                    });
+                });
+                return;
+            }
 
             // Handle events files
             if (res.parsed.is_events || res.parsed.format === "events") {
                 hasEvents = true;
                 eventsData.daily = (eventsData.daily || []).concat(res.parsed.daily || []);
                 eventsData.events_flat = (eventsData.events_flat || []).concat(res.parsed.events_flat || []);
-                // Merge monthly event counts
                 var em = res.parsed.monthly || {};
                 Object.keys(em).forEach(function(k) {
                     if (!eventsData.monthly[k]) {
@@ -1874,9 +1907,21 @@ function buildMaster(results) {
                 return;
             }
 
-            // Handle sales files
+            // Handle regular sales files
             var ts = res.parsed.tenants;
+            if (!ts) return;
             Object.keys(ts).forEach(function(t) {
+                if (hasPercentageSummary && tenantMap[t]) {
+                    var existingMonths = Object.keys(tenantMap[t].monthly);
+                    var newMonths = Object.keys(ts[t].monthly || {});
+                    var overlap = existingMonths.filter(function(m) {
+                        return newMonths.indexOf(m) !== -1;
+                    });
+                    if (overlap.length > 0) {
+                        duplicateWarnings.push(t + " (" + overlap.join(", ") + ")");
+                    }
+                }
+
                 if (!tenantMap[t]) tenantMap[t] = { monthly: {}, files: [], dailyCount: 0, daily: [] };
                 if (tenantMap[t].files.indexOf(res.filename) === -1)
                     tenantMap[t].files.push(res.filename);
@@ -1892,7 +1937,7 @@ function buildMaster(results) {
 
         } else {
             var msg = res.filename;
-            if (res.parsed && res.parsed.message) msg += " — " + res.parsed.message;
+            if (res.parsed && res.parsed.message) msg += " -- " + res.parsed.message;
             unparsed.push(msg);
         }
     });
@@ -1917,18 +1962,22 @@ function buildMaster(results) {
         var label = monthShort(parseInt(parts[1])) + "-" + parts[0].slice(2);
         html += '<th class="' + (mk === tKey ? "t-head" : "") + '">' + label + '</th>';
     });
-    html += "<th>Total</th></tr></thead><tbody>";
+    html += "<th>Total</th>";
+    if (hasPercentageSummary && percentageSummaryData && percentageSummaryData.percentage) {
+        html += "<th>MoM %</th>";
+    }
+    html += "</tr></thead><tbody>";
 
     var colTotals = {};
     var grand = 0;
+    var hasPctCol = hasPercentageSummary && percentageSummaryData && percentageSummaryData.percentage;
 
-    // Sales rows
     tenantNames.forEach(function(t) {
         var tm = tenantMap[t];
         var rowTotal = 0;
         html += "<tr><td><b>" + esc(t) + "</b><br><span class='src'>" +
                 esc(tm.files.join(", ")) +
-                (tm.dailyCount ? " · " + tm.dailyCount + " daily rows" : "") +
+                (tm.dailyCount ? " - " + tm.dailyCount + " daily rows" : "") +
                 "</span></td>";
         months.forEach(function(mk) {
             var v = tm.monthly[mk];
@@ -1937,23 +1986,38 @@ function buildMaster(results) {
                 colTotals[mk] = (colTotals[mk] || 0) + v;
                 html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
             } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">-</td>';
             }
         });
         grand += rowTotal;
-        html += "<td><b>" + fmtNum(rowTotal) + "</b></td></tr>";
+        html += "<td><b>" + fmtNum(rowTotal) + "</b></td>";
+
+        if (hasPctCol) {
+            var pctInfo = percentageSummaryData.percentage[t];
+            if (pctInfo && pctInfo.pct !== undefined && pctInfo.pct !== null) {
+                var pctVal = pctInfo.pct;
+                var pctColor = pctVal > 0 ? "var(--success)" : pctVal < 0 ? "var(--danger)" : "var(--text-muted)";
+                var pctSign = pctVal > 0 ? "+" : "";
+                html += '<td style="color:' + pctColor + ';font-weight:600">' + pctSign + pctVal + '%</td>';
+            } else {
+                html += '<td class="no-data">-</td>';
+            }
+        }
+        html += "</tr>";
     });
 
-    // Sales total row
-    html += '<tr class="total-row"><td>💰 TOTAL SALES</td>';
+    // Total row
+    html += '<tr class="total-row"><td>TOTAL SALES</td>';
     months.forEach(function(mk) {
         html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(colTotals[mk] || 0) + '</td>';
     });
-    html += "<td>" + fmtNum(grand) + "</td></tr>";
+    html += "<td>" + fmtNum(grand) + "</td>";
+    if (hasPctCol) html += "<td>-</td>";
+    html += "</tr>";
 
     // Traffic row
     if (hasTraffic) {
-        html += '<tr style="border-top:3px solid #3b82f6"><td><b>🚗 TRAFFIC</b><br>' +
+        html += '<tr style="border-top:3px solid #3b82f6"><td><b>TRAFFIC</b><br>' +
                 '<span class="src">Visitor count</span></td>';
         var trafficTotal = 0;
         months.forEach(function(mk) {
@@ -1962,13 +2026,14 @@ function buildMaster(results) {
                 trafficTotal += v;
                 html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(v) + '</td>';
             } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">-</td>';
             }
         });
-        html += "<td><b>" + fmtNum(trafficTotal) + "</b></td></tr>";
+        html += "<td><b>" + fmtNum(trafficTotal) + "</b></td>";
+        if (hasPctCol) html += "<td>-</td>";
+        html += "</tr>";
 
-        // Sales per visitor row
-        html += '<tr><td><b>📊 SALES / VISITOR</b><br>' +
+        html += '<tr><td><b>SALES / VISITOR</b><br>' +
                 '<span class="src">Average spend per visitor</span></td>';
         months.forEach(function(mk) {
             var sales = colTotals[mk] || 0;
@@ -1977,16 +2042,18 @@ function buildMaster(results) {
             if (ratio > 0) {
                 html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + fmtNum(ratio) + '</td>';
             } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">-</td>';
             }
         });
         var grandRatio = (trafficTotal > 0) ? Math.round(grand / trafficTotal) : 0;
-        html += "<td><b>" + fmtNum(grandRatio) + "</b></td></tr>";
+        html += "<td><b>" + fmtNum(grandRatio) + "</b></td>";
+        if (hasPctCol) html += "<td>-</td>";
+        html += "</tr>";
     }
 
     // Events row
     if (hasEvents) {
-        html += '<tr style="border-top:3px solid #a78bfa"><td><b>🎪 EVENTS</b><br>' +
+        html += '<tr style="border-top:3px solid #a78bfa"><td><b>EVENTS</b><br>' +
                 '<span class="src">Mall event count</span></td>';
         var totalEventCount = 0;
         months.forEach(function(mk) {
@@ -1996,31 +2063,29 @@ function buildMaster(results) {
                 totalEventCount += count;
                 html += '<td class="' + (mk === tKey ? "t-col" : "") + '">' + count + ' event(s)</td>';
             } else {
-                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">—</td>';
+                html += '<td class="no-data ' + (mk === tKey ? "t-col" : "") + '">-</td>';
             }
         });
-        html += "<td><b>" + totalEventCount + "</b></td></tr>";
+        html += "<td><b>" + totalEventCount + "</b></td>";
+        if (hasPctCol) html += "<td>-</td>";
+        html += "</tr>";
 
-        // Events detail row — show event names for target month only
         var targetMonthEvents = eventsData.monthly[tKey];
         if (targetMonthEvents && targetMonthEvents.events && targetMonthEvents.events.length > 0) {
-            // Group event names by date for the tooltip-style detail
             var eventNames = [];
             var seen = {};
             targetMonthEvents.events.forEach(function(e) {
                 var key = e.event_name;
-                if (!seen[key]) {
-                    seen[key] = true;
-                    eventNames.push(e.event_name);
-                }
+                if (!seen[key]) { seen[key] = true; eventNames.push(e.event_name); }
             });
 
-            html += '<tr><td colspan="' + (months.length + 2) + '" style="' +
+            var colSpan = months.length + 2 + (hasPctCol ? 1 : 0);
+            html += '<tr><td colspan="' + colSpan + '" style="' +
                     'padding:8px 12px;background:rgba(167,139,250,0.05);' +
                     'font-size:0.78em;color:#a78bfa;border-top:1px solid rgba(167,139,250,0.15)">' +
                     '<b>Events this month:</b> ' +
-                    esc(eventNames.slice(0, 12).join(" · ")) +
-                    (eventNames.length > 12 ? ' · <i>+' + (eventNames.length - 12) + ' more</i>' : '') +
+                    esc(eventNames.slice(0, 12).join(" - ")) +
+                    (eventNames.length > 12 ? ' + ' + (eventNames.length - 12) + ' more' : '') +
                     '</td></tr>';
         }
     }
@@ -2029,11 +2094,26 @@ function buildMaster(results) {
 
     document.getElementById("masterTable").innerHTML = html;
 
+    // Warning messages
     var warnEl = document.getElementById("masterWarn");
+    var warnMessages = [];
+
     if (unparsed.length) {
+        warnMessages.push("<b>" + unparsed.length + " file(s) could not be parsed:</b><br>" +
+            unparsed.map(esc).join("<br>"));
+    }
+
+    if (duplicateWarnings.length) {
+        warnMessages.push("<b>Duplicate data detected for " +
+            duplicateWarnings.length + " tenant-month(s):</b><br>" +
+            duplicateWarnings.map(esc).join("<br>") +
+            "<br><br><i>The percentage/summary workbook data is being used. " +
+            "Remove duplicate individual tenant files to avoid double-counting.</i>");
+    }
+
+    if (warnMessages.length) {
         warnEl.style.display = "block";
-        warnEl.innerHTML = "⚠️ <b>" + unparsed.length + " file(s) could not be parsed:</b><br>• " +
-            unparsed.map(esc).join("<br>• ");
+        warnEl.innerHTML = warnMessages.join("<br><br>");
     } else {
         warnEl.style.display = "none";
     }
@@ -2043,7 +2123,8 @@ function buildMaster(results) {
     // Store for export
     window._masterExportData = tenantMap;
     window._trafficExportData = hasTraffic ? trafficData : null;
-    window._eventExportData   = hasEvents  ? eventsData  : null;
+    window._eventExportData = hasEvents ? eventsData : null;
+    window._percentageSummaryData = hasPercentageSummary ? percentageSummaryData : null;
 }
 
 function monthShort(m) {
@@ -2210,6 +2291,19 @@ function renderCard(res, idx) {
             metaTags.push('<span class="meta-tag">Days: <b>' + pm.daily.length + '</b></span>');
             var trafficMonths = Object.keys(pm.monthly || {}).sort();
             metaTags.push('<span class="meta-tag">Months: <b>' + trafficMonths.length + '</b></span>');
+        } else if (pm.format === "percentage_summary") {
+            var pctTenants = Object.keys(pm.tenants || {});
+            var pctMonths = pm.all_months || [];
+            metaTags.push('<span class="meta-tag">Tenants: <b>' + pctTenants.length + '</b></span>');
+            metaTags.push('<span class="meta-tag">Months: <b>' + pctMonths.length + '</b></span>');
+            if (pm.pct_months) {
+                metaTags.push('<span class="meta-tag">MoM: <b>' +
+                    pm.pct_months.from + ' vs ' + pm.pct_months.to + '</b></span>');
+            }
+            if (pm.percentage) {
+                var pctCount = Object.keys(pm.percentage).length;
+                metaTags.push('<span class="meta-tag">% Changes: <b>' + pctCount + '</b></span>');
+            }
         } else if (pm.tenants) {
             var tenantNames = Object.keys(pm.tenants);
             var totalDaily = 0;
@@ -2904,57 +2998,142 @@ def upload():
         }
 
         if ext in [".xlsx", ".xls"]:
-            # ── Try event calendar first (multi-sheet) ──────
+
+            # ── 1. Try percentage + summary workbook FIRST ───
+            pct_sheets = detect_percentage_summary_file(filepath)
+            if pct_sheets:
+                pct_result = parse_percentage_summary(filepath)
+                if pct_result and pct_result.get("success"):
+                    tenant_count = len(pct_result.get("tenants", {}))
+                    all_months_list = pct_result.get("all_months", [])
+                    pct_data = pct_result.get("percentage", {})
+                    summary_text = pct_result.get("summary_text", [])
+
+                    preview_lines = [
+                        "PERCENTAGE + SUMMARY WORKBOOK DETECTED",
+                        "",
+                        "Tenants: %d" % tenant_count,
+                    ]
+                    if all_months_list:
+                        preview_lines.append(
+                            "Months: %d (%s to %s)" % (
+                                len(all_months_list),
+                                all_months_list[0],
+                                all_months_list[-1],
+                            )
+                        )
+                    else:
+                        preview_lines.append("Months: 0")
+
+                    pct_from = pct_result.get("pct_months", {}).get("from", "?")
+                    pct_to = pct_result.get("pct_months", {}).get("to", "?")
+                    preview_lines.append("MoM comparison: %s vs %s" % (pct_from, pct_to))
+                    preview_lines.append("")
+                    preview_lines.append("-" * 50)
+                    preview_lines.append("")
+                    preview_lines.append("Tenant Performance:")
+
+                    sorted_pct = sorted(
+                        pct_data.items(),
+                        key=lambda x: x[1].get("pct", 0),
+                        reverse=True,
+                    )
+                    for tenant, pct_info in sorted_pct:
+                        pv = pct_info.get("pct", 0)
+                        if pv > 0:
+                            arrow = "UP"
+                        elif pv < 0:
+                            arrow = "DOWN"
+                        else:
+                            arrow = "FLAT"
+                        preview_lines.append(
+                            "  %s %s: %+.0f%%" % (arrow, tenant, pv)
+                        )
+
+                    if summary_text:
+                        preview_lines.append("")
+                        preview_lines.append("-" * 50)
+                        preview_lines.append("")
+                        preview_lines.append("Summary Text:")
+                        for line in summary_text:
+                            if len(line) > 120:
+                                preview_lines.append("  " + line[:120] + "...")
+                            else:
+                                preview_lines.append("  " + line)
+
+                    entry["data_type"]  = "text"
+                    entry["data_lines"] = preview_lines
+                    entry["total_rows"] = tenant_count
+                    entry["success"]    = True
+                    entry["parsed"]     = pct_result
+
+                    # Month check
+                    detected = set()
+                    for mk in all_months_list:
+                        parts = mk.split("-")
+                        detected.add((int(parts[0]), int(parts[1])))
+                    detected.update(detect_months_in_text(f.filename))
+                    entry["month_check"] = validate_month(
+                        detected, target_year, target_month
+                    )
+
+                    results.append(entry)
+                    if filepath.exists():
+                        os.remove(filepath)
+                    continue
+
+            # ── 2. Try event calendar (multi-sheet) ──────────
             event_result = parse_event_file(filepath)
             if event_result and event_result.get("success"):
-                # Event file detected — show confirmation text, not raw table
                 event_count = len(event_result.get("events_flat", []))
                 months_found = sorted(event_result.get("monthly", {}).keys())
-                
-                # Build a simple confirmation preview
+
                 preview_lines = [
-                    "✅ EVENT CALENDAR DETECTED",
+                    "EVENT CALENDAR DETECTED",
                     "",
-                    f"Total events: {event_count}",
-                    f"Months covered: {', '.join(months_found)}",
+                    "Total events: %d" % event_count,
+                    "Months covered: %s" % ", ".join(months_found),
                     "",
                 ]
-                
-                # Show event count per month
+
                 for mk in months_found:
                     mv = event_result["monthly"][mk]
                     parts = mk.split("-")
-                    label = f"{cal.month_name[int(parts[1])]} {parts[0]}"
+                    label = "%s %s" % (cal.month_name[int(parts[1])], parts[0])
                     preview_lines.append(
-                        f"  {label}: {mv['event_count']} event(s) across {mv['event_days']} day(s)"
+                        "  %s: %d event(s) across %d day(s)" % (
+                            label, mv["event_count"], mv["event_days"]
+                        )
                     )
-                
+
                 preview_lines.append("")
-                preview_lines.append("─" * 50)
+                preview_lines.append("-" * 50)
                 preview_lines.append("")
-                
-                # Show sample events (first 15)
                 preview_lines.append("Sample events:")
                 seen_events = set()
                 for evt in event_result.get("events_flat", [])[:30]:
                     name = evt["event_name"]
                     if name not in seen_events:
                         seen_events.add(name)
-                        preview_lines.append(f"  📅 {evt['date']}  |  {evt['location']}  |  {name}")
+                        preview_lines.append(
+                            "  %s  |  %s  |  %s" % (
+                                evt["date"], evt["location"], name
+                            )
+                        )
                     if len(seen_events) >= 15:
                         remaining = event_count - 15
                         if remaining > 0:
-                            preview_lines.append(f"  ... and {remaining} more events")
+                            preview_lines.append(
+                                "  ... and %d more events" % remaining
+                            )
                         break
-                
+
                 entry["data_type"]  = "text"
                 entry["data_lines"] = preview_lines
                 entry["total_rows"] = event_count
-                
-                entry["success"] = True
-                entry["parsed"] = event_result
-                
-                # Month check from events dates
+                entry["success"]    = True
+                entry["parsed"]     = event_result
+
                 detected = set()
                 for evt in event_result.get("events_flat", []):
                     try:
@@ -2964,15 +3143,18 @@ def upload():
                     except (ValueError, IndexError):
                         pass
                 detected.update(detect_months_in_text(f.filename))
-                entry["month_check"] = validate_month(detected, target_year, target_month)
-                
+                entry["month_check"] = validate_month(
+                    detected, target_year, target_month
+                )
+
                 results.append(entry)
                 if filepath.exists():
                     os.remove(filepath)
-                continue  # skip the rest of the loop for this file
-            
-            # ── Normal Excel reading ────────────────────────
+                continue
+
+            # ── 3. Normal Excel reading ──────────────────────
             data = read_excel(filepath)
+
         elif ext == ".pdf":
             data = read_pdf(filepath)
         else:
@@ -2995,24 +3177,22 @@ def upload():
                 entry["total_rows"] = len(data["lines"])
                 detected = detect_months_in_lines(data["lines"])
 
-            # Month detection also uses raw lines if available
             if data.get("lines"):
                 detected.update(detect_months_in_lines(data["lines"]))
             if data.get("raw_lines"):
                 detected.update(detect_months_in_lines(data["raw_lines"]))
             detected.update(detect_months_in_text(f.filename))
-            entry["month_check"] = validate_month(detected, target_year, target_month)
+            entry["month_check"] = validate_month(
+                detected, target_year, target_month
+            )
 
-            # ─── PHASE 2: Parse the report structure ────────────
             parsed = parse_report(data, ext, f.filename)
             entry["parsed"] = parsed
 
-            # If it's events data, flag and store separately
             if parsed.get("is_events"):
                 entry["parsed"]["is_events"] = True
                 entry["is_events_file"] = True
 
-            # If it's traffic data, store separately
             if parsed.get("format") == "traffic":
                 entry["parsed"]["is_traffic"] = True
 
@@ -3076,33 +3256,33 @@ def export_pptx():
         master_data      = data.get("master", {})
         traffic_data     = data.get("traffic")
         events_data      = data.get("events")
-        pct_summary_data = data.get("percentage_summary")   # ← NEW
-        target_key       = f"{target_year}-{target_month:02d}"
-        month_label      = f"{cal.month_name[target_month]} {target_year}"
+        pct_summary_data = data.get("percentage_summary")
+        target_key       = "%d-%02d" % (target_year, target_month)
+        month_label      = "%s %d" % (cal.month_name[target_month], target_year)
 
         if not master_data and not pct_summary_data:
-            return jsonify({"error": "No sales data to build report"}), 400
+            return jsonify({"error": "No data to build report"}), 400
 
-        # ── Step 1: KPIs ──────────────────────────────────────
+        # Step 1: KPIs
         kpis = _build_kpis(master_data, traffic_data,
                            target_year, target_month, events_data)
 
-        # ── Step 2: LLM commentary ────────────────────────────
+        # Step 2: LLM
         if data.get("openai_key"):
             os.environ["OPENAI_API_KEY"] = data["openai_key"]
         llm_text = generate_slide_text(kpis)
 
-        # ── Step 3: Standard charts ───────────────────────────
+        # Step 3: Charts
         monthly_totals = {}
         for tm in master_data.values():
             for mk, v in tm.get("monthly", {}).items():
                 monthly_totals[mk] = monthly_totals.get(mk, 0) + v
 
-        tenant_sales_target = {
-            tenant: tm.get("monthly", {}).get(target_key, 0)
-            for tenant, tm in master_data.items()
-            if tm.get("monthly", {}).get(target_key, 0) > 0
-        }
+        tenant_sales_target = {}
+        for tenant, tm in master_data.items():
+            val = tm.get("monthly", {}).get(target_key, 0)
+            if val > 0:
+                tenant_sales_target[tenant] = val
 
         all_daily = []
         for tm in master_data.values():
@@ -3125,17 +3305,17 @@ def export_pptx():
                              ) if all_daily else None,
         }
 
-        # ── Step 4: Build PPTX (pct_summary slides included) ─
+        # Step 4: Build PPTX
         pptx_buf = build_pptx(
             kpis, llm_text, charts, month_label,
-            target_key       = target_key,
-            events_data      = events_data,
-            pct_summary_data = pct_summary_data,   # ← NEW
+            target_key=target_key,
+            events_data=events_data,
+            pct_summary_data=pct_summary_data,
         )
 
-        # ── Step 5: Return file ───────────────────────────────
+        # Step 5: Return
         month_abbr = cal.month_abbr[target_month]
-        filename   = f"Mall_Report_{month_abbr}_{target_year}.pptx"
+        filename = "Mall_Report_%s_%d.pptx" % (month_abbr, target_year)
 
         return send_file(
             pptx_buf,
@@ -3150,7 +3330,7 @@ def export_pptx():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"error": f"PPTX export failed: {str(e)}"}), 500
+        return jsonify({"error": "PPTX export failed: %s" % str(e)}), 500
 
 
 if __name__ == "__main__":
