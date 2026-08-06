@@ -3065,53 +3065,44 @@ def export():
 
 @app.route("/export_pptx", methods=["POST"])
 def export_pptx():
-    """
-    Generate and download the monthly PowerPoint.
-
-    Expects same JSON body as /export, plus optional "openai_key".
-    """
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "No data received"}), 400
 
-        target_month  = int(data.get("month", 1))
-        target_year   = int(data.get("year", 2026))
-        master_data   = data.get("master", {})
-        traffic_data  = data.get("traffic")
-        events_data   = data.get("events")
-        target_key    = f"{target_year}-{target_month:02d}"
-        month_label   = f"{cal.month_name[target_month]} {target_year}"
+        target_month     = int(data.get("month", 1))
+        target_year      = int(data.get("year", 2026))
+        master_data      = data.get("master", {})
+        traffic_data     = data.get("traffic")
+        events_data      = data.get("events")
+        pct_summary_data = data.get("percentage_summary")   # ← NEW
+        target_key       = f"{target_year}-{target_month:02d}"
+        month_label      = f"{cal.month_name[target_month]} {target_year}"
 
-        if not master_data:
+        if not master_data and not pct_summary_data:
             return jsonify({"error": "No sales data to build report"}), 400
 
-        # ── Step 1: Compute KPIs (pure Python) ────────────────
-        kpis = _build_kpis(master_data, traffic_data, target_year, target_month, events_data)
+        # ── Step 1: KPIs ──────────────────────────────────────
+        kpis = _build_kpis(master_data, traffic_data,
+                           target_year, target_month, events_data)
 
-        # ── Step 2: LLM writes commentary ─────────────────────
-        # Optionally allow front-end to pass an API key
+        # ── Step 2: LLM commentary ────────────────────────────
         if data.get("openai_key"):
-            import os
             os.environ["OPENAI_API_KEY"] = data["openai_key"]
-
         llm_text = generate_slide_text(kpis)
 
-        # ── Step 3: Build charts ───────────────────────────────
-        # Monthly sales totals across all tenants
+        # ── Step 3: Standard charts ───────────────────────────
         monthly_totals = {}
         for tm in master_data.values():
             for mk, v in tm.get("monthly", {}).items():
                 monthly_totals[mk] = monthly_totals.get(mk, 0) + v
 
-        # Sales per tenant for target month
         tenant_sales_target = {
             tenant: tm.get("monthly", {}).get(target_key, 0)
             for tenant, tm in master_data.items()
             if tm.get("monthly", {}).get(target_key, 0) > 0
         }
 
-        # All daily rows combined
         all_daily = []
         for tm in master_data.values():
             all_daily.extend(tm.get("daily", []))
@@ -3119,32 +3110,29 @@ def export_pptx():
         charts = {
             "monthly_sales": chart_monthly_sales(monthly_totals, target_key)
                              if monthly_totals else None,
-
-            "top_tenants"  : chart_top_tenants(tenant_sales_target, target_key)
+            "top_tenants":   chart_top_tenants(tenant_sales_target, target_key)
                              if tenant_sales_target else None,
-
-            "traffic"      : chart_traffic(
+            "traffic":       chart_traffic(
                                  traffic_data.get("monthly", {}) if traffic_data else {},
-                                 monthly_totals,
-                                 target_key,
+                                 monthly_totals, target_key,
                              ) if traffic_data else None,
-
-            "daily_sales"  : chart_daily_sales(
-                                 all_daily,
-                                 target_key,
-                                 traffic_daily=traffic_data.get("daily", []) if traffic_data else None,
-                             )
-                             if all_daily else None,
+            "daily_sales":   chart_daily_sales(
+                                 all_daily, target_key,
+                                 traffic_daily=(
+                                     traffic_data.get("daily", []) if traffic_data else None
+                                 ),
+                             ) if all_daily else None,
         }
 
-        # ── Step 4: Assemble PowerPoint ────────────────────────
+        # ── Step 4: Build PPTX (pct_summary slides included) ─
         pptx_buf = build_pptx(
-        kpis, llm_text, charts, month_label,
-        target_key=target_key,
-        events_data=events_data,
-    )
+            kpis, llm_text, charts, month_label,
+            target_key       = target_key,
+            events_data      = events_data,
+            pct_summary_data = pct_summary_data,   # ← NEW
+        )
 
-        # ── Step 5: Return file ────────────────────────────────
+        # ── Step 5: Return file ───────────────────────────────
         month_abbr = cal.month_abbr[target_month]
         filename   = f"Mall_Report_{month_abbr}_{target_year}.pptx"
 
